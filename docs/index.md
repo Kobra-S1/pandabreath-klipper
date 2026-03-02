@@ -117,6 +117,7 @@ The Snapmaker U1 runs a modified Klipper + Moonraker stack. The BIQU Panda Breat
 | `printer.cfg` reference (Stock/ESPHome) | [printer.cfg Reference](klipper/printer-cfg.md) |
 | ESPHome firmware (reflash alternative) | [ESPHome](esphome/index.md) |
 | KlipperMCU firmware (native MCU, USB) | [KlipperMCU](klipper-mcu/index.md) |
+| Multi-instance bridging (KlipperMCU) | [Klipper Router](https://github.com/paxx12/klipper-router) |
 | WebSocket API reference | [Protocol](protocol.md) |
 | Hardware schematic analysis | [Hardware](hardware.md) |
 | Firmware binary analysis | [Firmware](firmware.md) |
