@@ -134,4 +134,6 @@ The Snapmaker U1 runs a modified Klipper + Moonraker stack. The BIQU Panda Breat
 
 ---
 
+[![Buy Me A Coffee](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/wildtang3nt)
+
 *All protocol knowledge is derived from reverse engineering. No official API documentation exists from BTT. See [Research Methodology](research/methodology.md) for full provenance.*
