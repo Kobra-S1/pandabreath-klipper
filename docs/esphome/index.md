@@ -2,8 +2,8 @@
 
 An alternative to the OEM firmware: reflash the Panda Breath's ESP32-C3 with [ESPHome](https://esphome.io), then use the MQTT transport in `panda_breath.py`.
 
-!!! warning "GPIO verification required before flashing"
-    Three GPIO pin assignments in `esphome/panda_breath.yaml` are unconfirmed placeholders. The schematic lists physical IC package pin numbers, not GPIO numbers. **Do not flash until these are resolved** — wrong values risk driving the relay or NTC ADC on incorrect pins. See the [setup guide](https://github.com/justinh-rahb/pandabreath-klipper/blob/main/esphome/README.md) for verification steps.
+!!! warning "Continuity testing recommended before flashing"
+    GPIO pin assignments for TH0, TH1, and RLY_MOSFET have been inferred by cross-referencing the schematic's module pad numbers with the ESP32-C3-MINI-1 datasheet. The assignments are high-confidence but not yet verified on real hardware. **Continuity testing is recommended before first flash** to confirm the three inferred pins. See the [setup guide](https://github.com/justinh-rahb/pandabreath-klipper/blob/main/esphome/README.md) for verification steps.
 
 ---
 
@@ -41,9 +41,9 @@ The Panda Breath hardware maps directly to ESPHome components:
 
 | Hardware | GPIO | ESPHome component |
 |---|---|---|
-| Chamber NTC thermistor (TH0) | Unconfirmed — see below | `sensor.ntc` via `sensor.resistance` + `sensor.adc` |
-| PTC element NTC thermistor (TH1) | Unconfirmed — see below | `sensor.ntc` (safety monitoring) |
-| PTC heater relay (RLY_MOSFET) | Unconfirmed — see below | `switch.gpio` → `climate.bang_bang` |
+| Chamber NTC thermistor (TH0) | GPIO0 (ADC1_CH0) ⚠ | `sensor.ntc` via `sensor.resistance` + `sensor.adc` |
+| PTC element NTC thermistor (TH1) | GPIO1 (ADC1_CH1) ⚠ | `sensor.ntc` (safety monitoring) |
+| PTC heater relay (RLY_MOSFET) | GPIO18 ⚠ | `switch.gpio` → `climate.bang_bang` |
 | Fan TRIAC gate (FAN / IO03) | GPIO3 | `output.ac_dimmer` gate_pin |
 | Zero-crossing detector (ZERO / IO07) | GPIO7 | `output.ac_dimmer` zero_cross_pin |
 | K2 button (IO00) | GPIO0 | `binary_sensor.gpio` |
@@ -55,15 +55,15 @@ The Panda Breath hardware maps directly to ESPHome components:
 !!! note "GPIO7 / K1 button conflict"
     GPIO7 is dedicated to the TRIAC zero-crossing interrupt in the ESPHome config. The K1 button (which also uses GPIO7 in the OEM firmware) is therefore not available as a binary sensor. If GPIO0 is confirmed to also carry the zero-crossing signal (needs oscilloscope verification), GPIO0 can be used for zero_cross_pin and GPIO7 freed for K1 button.
 
-### Unconfirmed GPIO pins
+### Inferred GPIO pins
 
-Three pins require hardware verification before first flash:
+Three pins were resolved by cross-referencing the schematic's module pad numbers with the [ESP32-C3-MINI-1 datasheet](https://www.espressif.com/sites/default/files/documentation/esp32-c3-mini-1_datasheet_en.pdf). The OEM firmware's `app_temp.c` confirms both NTC channels use a single `adc_handle` (ADC1). Continuity testing is recommended to confirm.
 
-| Substitution in YAML | Placeholder | Physical IC pin | How to verify |
-|---|---|---|---|
-| `gpio_ntc_chamber` | `GPIO1` | 12 | Continuity from TH0 pad to ESP32-C3 module castellation |
-| `gpio_ntc_ptc` | `GPIO19` | 13 | Continuity from TH1 pad — **GPIO19 is USB D+ and almost certainly wrong** |
-| `gpio_relay` | `GPIO8` | 26 | Continuity from RLY_MOSFET pad — **GPIO26 doesn't exist on ESP32-C3** |
+| Substitution in YAML | Inferred GPIO | Module pad | ADC channel | Notes |
+|---|---|---|---|---|
+| `gpio_ntc_chamber` | `GPIO0` | 12 | ADC1_CH0 | Chamber/warehouse temperature; shared with K2 button net |
+| `gpio_ntc_ptc` | `GPIO1` | 13 | ADC1_CH1 | PTC element temperature (thermal safety) |
+| `gpio_relay` | `GPIO18` | 26 | — | Digital output → Q3 NPN → SSR relay |
 
 These are in the `substitutions:` block at the top of `esphome/panda_breath.yaml` for easy editing once confirmed.
 

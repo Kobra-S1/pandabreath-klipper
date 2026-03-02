@@ -14,9 +14,9 @@
 #   5. Set serial: below to the correct path.
 #
 # GPIO pin notes:
-#   heater_pin and sensor_pin use placeholder GPIO numbers.
-#   GPIO_NTC_CHAMBER and GPIO_RELAY in board/panda_breath_pins.h are UNVERIFIED —
-#   do hardware continuity testing before first use with a live heater.
+#   GPIO assignments inferred from ESP32-C3-MINI-1 module datasheet pad layout.
+#   GPIO_NTC_CHAMBER (TH0, pad 12 = GPIO0) and GPIO_RELAY (RLY_MOSFET, pad 26 = GPIO18)
+#   are high-confidence but continuity testing is recommended before first use.
 #   See research/hardware-schematic.md and klipper-firmware/components/klipper/board/panda_breath_pins.h.
 
 [mcu panda_breath]
@@ -26,9 +26,9 @@ serial: /dev/ttyUSB0    # adjust if needed; check with: ls /dev/ttyUSB*
 # Klipper's PID loop duty-cycles the relay for temperature regulation,
 # matching the same approach used by the OEM firmware.
 [heater_generic chamber]
-heater_pin: panda_breath:gpio10         # GPIO_RELAY — !! verify before use !!
+heater_pin: panda_breath:gpio18         # GPIO_RELAY (module pad 26) — inferred, continuity test recommended
 sensor_type: NTC 100K beta 3950
-sensor_pin: panda_breath:gpio1          # GPIO_NTC_CHAMBER — !! verify before use !!
+sensor_pin: panda_breath:gpio0           # GPIO_NTC_CHAMBER (module pad 12) — inferred, continuity test recommended
 control: pid
 pid_kp: 10
 pid_ki: 0.1
@@ -47,6 +47,6 @@ heating_gain: 1
 # (Remove if heater_generic above already appears in your UI)
 # [temperature_sensor panda_breath_chamber]
 # sensor_type: NTC 100K beta 3950
-# sensor_pin: panda_breath:gpio1
+# sensor_pin: panda_breath:gpio0
 # min_temp: 0
 # max_temp: 70

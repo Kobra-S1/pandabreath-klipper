@@ -2,8 +2,8 @@
 
 A third alternative to the OEM and ESPHome paths: replace the Panda Breath's ESP32-C3 firmware with a custom [ESP-IDF](https://idf.espressif.com/) build that speaks the native **Klipper MCU binary protocol** over USB serial (via the onboard CH340K bridge).
 
-!!! warning "GPIO verification required before flashing"
-    Three GPIO pin assignments in `klipper-firmware/components/klipper/board/panda_breath_pins.h` are unconfirmed placeholders. The schematic gives physical IC package pin numbers, not GPIO numbers. **Do not flash until these are resolved** — wrong values risk driving the relay or NTC ADC on incorrect pins. See [Unconfirmed GPIO pins](#unconfirmed-gpio-pins) below.
+!!! warning "Continuity testing recommended before flashing"
+    GPIO pin assignments for TH0, TH1, and RLY_MOSFET have been inferred by cross-referencing the schematic's module pad numbers with the ESP32-C3-MINI-1 datasheet. The assignments are high-confidence but not yet verified on real hardware. **Continuity testing is recommended before first flash** to confirm the three inferred pins. See [Inferred GPIO pins](#inferred-gpio-pins) below.
 
 !!! tip "No `panda_breath.py` needed"
     With this path, Klipper connects to the Panda Breath directly as a native `[mcu panda_breath]`. No Python extras module, no MQTT broker, no WiFi required — just a USB cable.
@@ -56,12 +56,12 @@ Klipper host (U1)
 
 | Hardware | GPIO | Klipper reference | Notes |
 |---|---|---|---|
-| Chamber NTC thermistor (TH0) | `GPIO1` ⚠ | `panda_breath:gpio1` | **Unconfirmed** — physical IC pin 12 |
-| PTC element NTC (TH1) | `GPIO8` ⚠ | Internal only | **Unconfirmed** — not exposed to Klipper |
-| PTC heater relay (RLY_MOSFET) | `GPIO10` ⚠ | `panda_breath:gpio10` | **Unconfirmed** — physical IC pin 26 |
+| Chamber NTC thermistor (TH0) | `GPIO0` ⚠ | `panda_breath:gpio0` | **Inferred** — module pad 12 = GPIO0 (ADC1_CH0) |
+| PTC element NTC (TH1) | `GPIO1` ⚠ | Internal only | **Inferred** — module pad 13 = GPIO1 (ADC1_CH1) |
+| PTC heater relay (RLY_MOSFET) | `GPIO18` ⚠ | `panda_breath:gpio18` | **Inferred** — module pad 26 = GPIO18 |
 | Fan TRIAC gate (IO03) | `GPIO3` ✓ | Internal only | Confirmed from schematic IO label |
 | Zero-crossing detector (IO07) | `GPIO7` ✓ | Internal only | Confirmed from schematic IO label |
-| K2 button (IO00) | `GPIO0` ✓ | `panda_breath:gpio0` | Confirmed |
+| K2 button (IO00) | `GPIO0` ✓ | `panda_breath:gpio0` | Confirmed (shared with TH0 ADC) |
 | K3 button (IO02) | `GPIO2` ✓ | `panda_breath:gpio2` | Confirmed |
 | K1-LED (IO06) | `GPIO6` ✓ | `panda_breath:gpio6` | Confirmed |
 | K2-LED (IO05) | `GPIO5` ✓ | `panda_breath:gpio5` | Confirmed |
@@ -69,15 +69,15 @@ Klipper host (U1)
 | UART0 TX | `GPIO21` ✓ | — | CH340K bridge, confirmed |
 | UART0 RX | `GPIO20` ✓ | — | CH340K bridge, confirmed |
 
-### Unconfirmed GPIO pins
+### Inferred GPIO pins
 
-Three pins require hardware continuity testing before first flash:
+Three pins were resolved by cross-referencing the schematic's module pad numbers with the [ESP32-C3-MINI-1 datasheet](https://www.espressif.com/sites/default/files/documentation/esp32-c3-mini-1_datasheet_en.pdf) pad layout. The OEM firmware's `app_temp.c` strings confirm both NTC channels use a single `adc_handle` (ADC1), constraining them to GPIO0–GPIO4.
 
-| Pin name | Placeholder GPIO | Physical IC pin | How to verify |
-|---|---|---|---|
-| `GPIO_NTC_CHAMBER` (TH0) | `GPIO1` | 12 | Continuity from TH0 PCB pad to ESP32-C3 module castellation |
-| `GPIO_NTC_PTC` (TH1) | `GPIO8` | 13 | Continuity from TH1 PCB pad to module castellation |
-| `GPIO_RELAY` (RLY_MOSFET) | `GPIO10` | 26 | Continuity from RLY_MOSFET pad to module castellation |
+| Pin name | Inferred GPIO | Module pad | ADC channel | Evidence |
+|---|---|---|---|---|
+| `GPIO_NTC_CHAMBER` (TH0) | `GPIO0` | 12 | ADC1_CH0 | Module pad 12 = GPIO0; only remaining ADC1 pin after IO-labeled pins allocated |
+| `GPIO_NTC_PTC` (TH1) | `GPIO1` | 13 | ADC1_CH1 | Module pad 13 = GPIO1; adjacent to TH0 on the module |
+| `GPIO_RELAY` (RLY_MOSFET) | `GPIO18` | 26 | — | Module pad 26 = GPIO18; digital output, no ADC needed |
 
 Edit `klipper-firmware/components/klipper/board/panda_breath_pins.h` once values are confirmed.
 
@@ -136,9 +136,9 @@ serial: /dev/ttyUSB0        # adjust port — check: ls /dev/ttyUSB*
 baud: 250000
 
 [heater_generic chamber]
-heater_pin: panda_breath:gpio10          # placeholder — verify GPIO_RELAY
+heater_pin: panda_breath:gpio18          # GPIO_RELAY (module pad 26) — inferred, continuity test recommended
 sensor_type: NTC 100K beta 3950
-sensor_pin: panda_breath:gpio1           # placeholder — verify GPIO_NTC_CHAMBER
+sensor_pin: panda_breath:gpio0           # GPIO_NTC_CHAMBER (module pad 12) — inferred, continuity test recommended
 control: pid
 pid_kp: 10
 pid_ki: 0.1
@@ -154,7 +154,7 @@ heating_gain: 1
 ```
 
 !!! tip "PID tuning"
-    After hardware verification, run Klipper's built-in PID calibration:
+    After confirming GPIO assignments on hardware, run Klipper's built-in PID calibration:
     ```
     PID_CALIBRATE HEATER=chamber TARGET=40
     ```

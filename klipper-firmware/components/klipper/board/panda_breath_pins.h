@@ -5,10 +5,12 @@
 // Panda Breath (ESP32-C3-MINI-1-H4X) GPIO assignments
 //
 // Sources: hardware schematic reverse-engineered from real device.
-// The schematic uses IC *package* pin numbers, not GPIO numbers.
-// GPIO numbers confirmed via IO-net labels in the schematic are marked CONFIRMED.
-// GPIO numbers for TH0, TH1, and RLY_MOSFET are UNVERIFIED — determine by
-// continuity testing from PCB pad to ESP32-C3-MINI castellations before use.
+// The schematic uses ESP32-C3-MINI-1 *module pad* numbers (not QFN32 IC package
+// pins). Cross-referencing the module datasheet pad layout resolves all GPIOs.
+//
+// GPIO numbers confirmed via IO-net labels are marked CONFIRMED.
+// GPIO numbers inferred from module pad cross-reference are marked INFERRED —
+// continuity testing on real hardware is recommended before first flash.
 // See research/hardware-schematic.md for full schematic analysis.
 // =============================================================================
 
@@ -41,26 +43,28 @@
 #define GPIO_UART_RX        20  // RXD0
 
 // -----------------------------------------------------------------------------
-// UNVERIFIED — schematic gives IC package pin number only.
-// !! DO NOT FLASH until confirmed by continuity testing !!
-// Map physical package pin → module castellation → GPIO using the
-// ESP32-C3-MINI-1 datasheet module pad layout.
+// INFERRED — resolved by cross-referencing schematic module pad numbers with
+// the ESP32-C3-MINI-1 datasheet. Both ADC channels use a single adc_handle
+// (ADC1) in the OEM firmware (confirmed from strings), constraining them to
+// GPIO0–GPIO4. Continuity testing recommended to confirm before first flash.
 // -----------------------------------------------------------------------------
 
-// Chamber NTC thermistor (TH0, schematic physical pin 12)
-// Must be an ADC-capable pin. ADC1 channels on ESP32-C3: GPIO0–GPIO4.
-// GPIO1 (ADC1_CH1) is the only ADC pin not otherwise assigned — best guess.
-#define GPIO_NTC_CHAMBER    1   // TH0 — !! UNVERIFIED, continuity test required !!
+// Chamber NTC thermistor (TH0, module pad 12 = GPIO0 = ADC1_CH0)
+// OEM firmware reads this as WAREHOUSE_ADC_CHAN via adc_oneshot.
+// GPIO0 is also the IO00/K2 button net — in OEM firmware K2 is a digital
+// input with interrupt, while TH0 is read via adc_oneshot (ADC and GPIO can
+// coexist if not used simultaneously; the KlipperMCU firmware uses ADC only).
+#define GPIO_NTC_CHAMBER    0   // TH0 — INFERRED from module pad 12, continuity test recommended
 
-// PTC heater element NTC thermistor (TH1, schematic physical pin 13)
+// PTC heater element NTC thermistor (TH1, module pad 13 = GPIO1 = ADC1_CH1)
 // Used internally for PTC overheat detection — NOT exposed to Klipper.
-// No confirmed ADC-capable candidate; placeholder only.
-#define GPIO_NTC_PTC        8   // TH1 — !! UNVERIFIED, almost certainly wrong !!
+#define GPIO_NTC_PTC        1   // TH1 — INFERRED from module pad 13, continuity test recommended
 
-// PTC relay drive (RLY_MOSFET, schematic physical pin 26)
+// PTC relay drive (RLY_MOSFET, module pad 26 = GPIO18)
 // Drives Q3 NPN transistor base → MGR-GJ-5-L SSR coil → PTC heater AC switch.
 // Klipper configures this as heater_pin via config_digital_out.
-// IO10 is "TBD" in the schematic — plausible candidate for pin 26 area.
-#define GPIO_RELAY          10  // RLY_MOSFET — !! UNVERIFIED, continuity test required !!
+// GPIO18 is a general-purpose I/O on the ESP32-C3-MINI-1 (internal flash
+// variant does not use GPIO12-17 for SPI, so GPIO18 is free).
+#define GPIO_RELAY          18  // RLY_MOSFET — INFERRED from module pad 26, continuity test recommended
 
 #endif // __PANDA_BREATH_PINS_H

@@ -21,23 +21,27 @@ AC mains (L/N) → F1 fuse (MTST630AL) → R1 MOV (10D-11) surge protection
 
 ### GPIO Assignments
 
-| Net name | ESP32 pin | Connected to |
-|---|---|---|
-| `IO02` | 6 | K3 button (10K pullup via R2) |
-| `IO03` | 7 | FAN signal |
-| `EN` | 8 | RESET button (10K pullup via R4) |
-| `TH0` | 12 | NTC thermistor 0 ADC input |
-| `TH1` | 13 | NTC thermistor 1 ADC input |
-| `IO00` | 15 | K2 button + ZERO crossing |
-| `IO10` | 17 | (TBD) |
-| `IO04` | 19 | K3-LED |
-| `IO05` | 20 | K2-LED |
-| `IO06` | 21 | K1-LED |
-| `IO07`/`ZERO` | 22 | K1 button / ZERO crossing signal |
-| `BOOT` | 23 | SW4 (BOOT button) |
-| `RLY_MOSFET` | 26 | Relay drive transistor (Q3 base) |
-| `TXD0` | 30 | CH340K UART TX |
-| `RXD0` | 31 | CH340K UART RX |
+The "ESP32 pin" column lists **ESP32-C3-MINI-1 module pad numbers** (not QFN32 IC package pins). These map directly to GPIOs via the [module datasheet](https://www.espressif.com/sites/default/files/documentation/esp32-c3-mini-1_datasheet_en.pdf) pad layout. Cross-reference confirmed by matching known pins: EN at pad 8, BOOT/GPIO9 at pad 23, TXD0/GPIO21 at pad 30, RXD0/GPIO20 at pad 31.
+
+| Net name | Module pad | GPIO | Connected to |
+|---|---|---|---|
+| `IO02` | 6 | GPIO3 | K3 button (10K pullup via R2) |
+| `IO03` | 7 | GPIO3 | FAN signal |
+| `EN` | 8 | EN | RESET button (10K pullup via R4) |
+| `TH0` | 12 | **GPIO0** (ADC1_CH0) | NTC thermistor 0 ADC input — chamber/warehouse temp |
+| `TH1` | 13 | **GPIO1** (ADC1_CH1) | NTC thermistor 1 ADC input — PTC element temp |
+| `IO00` | 15 | GPIO0 | K2 button + ZERO crossing (shared with TH0 ADC) |
+| `IO10` | 17 | GPIO10 | (TBD — unused in current firmware paths) |
+| `IO04` | 19 | GPIO4 | K3-LED |
+| `IO05` | 20 | GPIO5 | K2-LED |
+| `IO06` | 21 | GPIO6 | K1-LED |
+| `IO07`/`ZERO` | 22 | GPIO7 | K1 button / ZERO crossing signal |
+| `BOOT` | 23 | GPIO9 | SW4 (BOOT button) |
+| `RLY_MOSFET` | 26 | **GPIO18** | Relay drive transistor (Q3 base) |
+| `TXD0` | 30 | GPIO21 | CH340K UART TX |
+| `RXD0` | 31 | GPIO20 | CH340K UART RX |
+
+> **Note on IO net label offset:** The schematic's IO-net labels (IO00, IO02, IO03, etc.) don't always match the GPIO number derived from the module pad. For example, net "IO02" at module pad 6 maps to GPIO3 per the datasheet. This is a labeling convention in the schematic, not an error — the module pad number is the authoritative reference for GPIO mapping.
 
 ## PTC Heater Control
 
@@ -79,7 +83,7 @@ Two identical NTC thermistor input circuits:
 
 **TH1** — connected to ESP32 `TH1` ADC (identical circuit with R31/R32/R33/D9/C17):
 
-**Which is which?** From firmware strings: `ptc_sensor_status` and `warehouse_sensor_status` are tracked separately. One NTC measures PTC heater element temperature (for thermal runaway protection), the other measures chamber/warehouse air temperature. The `warehouse_temper` (chamber air) is what Klipper sees.
+**Which is which?** Resolved from firmware strings and ADC channel ordering: `WAREHOUSE_ADC_CHAN` is read first in `app_temp.c`, followed by `PTC_ADC_CHAN`. Both use the same `adc_handle` (ADC1). Module pad 12 (GPIO0 = ADC1_CH0) is TH0 = **warehouse/chamber temperature** (`warehouse_temper`). Module pad 13 (GPIO1 = ADC1_CH1) is TH1 = **PTC element temperature** (thermal runaway protection only).
 
 Thermistor spec from BTT Wiki: **NTC 100K** (from top-left quadrant: `R7: NTC 100K/NC` and `R3: 33K/NC 0.1%`)
 

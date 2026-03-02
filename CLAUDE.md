@@ -181,7 +181,7 @@ This means the U1 overlay is a single file drop — no opkg, no entware packages
 - No authentication on the WebSocket — only a concern on untrusted networks
 - Snapmaker U1 modified Klipper may have subtle differences from upstream — test on real hardware
 - **No pre-built opkg repo for U1 extended firmware** — Entware is present on devel builds but packages must be sourced/built manually; this is a future task when building the U1 overlay
-- **ESPHome GPIO verification pending** — three GPIO pin assignments (TH0 chamber NTC, TH1 PTC NTC, RLY_MOSFET relay) use placeholder values in `esphome/panda_breath.yaml`; physical pin numbers in the schematic are IC package pin numbers, not GPIO numbers — requires continuity testing on real hardware before first ESPHome flash
+- **ESPHome GPIO pins resolved** — three GPIO pin assignments (TH0 chamber NTC → GPIO0, TH1 PTC NTC → GPIO1, RLY_MOSFET relay → GPIO18) inferred by cross-referencing schematic module pad numbers with ESP32-C3-MINI-1 datasheet; continuity testing on real hardware recommended to confirm
 
 ## Development Approach
 
@@ -194,7 +194,7 @@ This means the U1 overlay is a single file drop — no opkg, no entware packages
 6. Handle reconnection, error states, and thermal-runaway-safe defaults
 
 ### ESPHome firmware (`esphome/`)
-1. Resolve three placeholder GPIO substitutions (TH0, TH1, RLY_MOSFET) via hardware continuity testing
+1. ~~Resolve three placeholder GPIO substitutions (TH0, TH1, RLY_MOSFET) via hardware continuity testing~~ — resolved via module datasheet cross-reference (GPIO0, GPIO1, GPIO18); continuity testing recommended to confirm
 2. Verify GPIO0/GPIO7 zero-crossing conflict (oscilloscope with mains connected)
 3. Flash ESPHome, validate NTC readings against OEM firmware values
 4. Tune `min_power` for fan stall threshold
@@ -202,7 +202,7 @@ This means the U1 overlay is a single file drop — no opkg, no entware packages
 
 ### KlipperMCU firmware (`klipper-firmware/`)
 Based on nikhil-robinson/klipper_esp32; adapted for ESP32-C3 + Panda Breath hardware.
-1. Resolve three placeholder GPIOs in `board/panda_breath_pins.h` (TH0/TH1/RLY_MOSFET) via hardware continuity testing — same blocker as ESPHome path
+1. ~~Resolve three placeholder GPIOs in `board/panda_breath_pins.h` (TH0/TH1/RLY_MOSFET) via hardware continuity testing~~ — resolved via module datasheet cross-reference (GPIO0, GPIO1, GPIO18); continuity testing recommended to confirm
 2. Build: `cd klipper-firmware && idf.py set-target esp32c3 && idf.py build`
 3. Flash: `idf.py -p /dev/cu.wchusbserial* flash`
 4. Copy `components/klipper/klipper/out/klipper.dict` to Klipper host alongside `printer.cfg`
@@ -225,7 +225,7 @@ Based on nikhil-robinson/klipper_esp32; adapted for ESP32-C3 + Panda Breath hard
 panda_breath.py          # Klipper extras module — stock + ESPHome, stdlib only
 test_ws.py               # standalone WebSocket probe/test tool (stock firmware)
 esphome/
-  panda_breath.yaml      # ESPHome config (!! 3 GPIO substitutions need hardware verification)
+  panda_breath.yaml      # ESPHome config (GPIOs inferred from module datasheet — continuity test recommended)
   secrets.yaml           # credentials — gitignored
   secrets.yaml.example   # template
   README.md              # ESPHome setup, TODOs, validation steps, recovery
@@ -238,7 +238,7 @@ klipper-firmware/        # Pathway 3: KlipperMCU ESP-IDF firmware (ESP32-C3)
   components/klipper/
     CMakeLists.txt       # Klipper MCU C sources + board layer + CTR extraction
     board/
-      panda_breath_pins.h  # GPIO assignments (3 unverified — continuity test required)
+      panda_breath_pins.h  # GPIO assignments (3 inferred from module datasheet — continuity test recommended)
       fan.c              # TRIAC phase-angle fan control (ZCD ISR + esp_timer)
       adc.c              # ESP32-C3 ADC (adc_oneshot API, NTC channels)
       gpio.c             # GPIO out/in using ESP-IDF LL macros

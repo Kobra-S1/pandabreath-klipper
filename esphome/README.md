@@ -31,27 +31,25 @@ straightforward — this approach is reversible.
 
 ---
 
-## Blockers — must resolve before first flash
+## Pre-flash checklist
 
-### 1. GPIO pin verification (critical)
+### 1. GPIO pin verification (recommended)
 
-The hardware schematic lists ESP32-C3 **physical IC package pin numbers**, not GPIO
-numbers. Three GPIOs are unresolved and currently use placeholder substitutions in
-`panda_breath.yaml`. **Do not flash until these are confirmed** — wrong values risk
-driving the relay or NTC ADC on incorrect pins.
+GPIO assignments for TH0, TH1, and RLY_MOSFET have been inferred by
+cross-referencing the schematic's ESP32-C3-MINI-1 module pad numbers with the
+[module datasheet](https://www.espressif.com/sites/default/files/documentation/esp32-c3-mini-1_datasheet_en.pdf).
+The assignments are high-confidence but not yet physically verified.
 
-| Substitution | Placeholder | Schematic | What to do |
-|---|---|---|---|
-| `gpio_ntc_chamber` | `GPIO1` | Physical pin 12 | Continuity from TH0 pad to ESP32-C3 module castellation |
-| `gpio_ntc_ptc` | `GPIO19` | Physical pin 13 | Continuity from TH1 pad to module castellation — **GPIO19 is USB D+ and is almost certainly wrong** |
-| `gpio_relay` | `GPIO8` | Physical pin 26 | Continuity from RLY_MOSFET pad — **GPIO26 does not exist on ESP32-C3** |
+| Substitution | Inferred GPIO | Module pad | ADC channel | Notes |
+|---|---|---|---|---|
+| `gpio_ntc_chamber` | `GPIO0` | 12 | ADC1_CH0 | Chamber/warehouse temp; shared with K2 button net |
+| `gpio_ntc_ptc` | `GPIO1` | 13 | ADC1_CH1 | PTC element temp (thermal safety) |
+| `gpio_relay` | `GPIO18` | 26 | — | Digital output → Q3 NPN → SSR relay |
 
-Cross-reference the [ESP32-C3-MINI-1-H4X module pad layout](https://www.espressif.com/sites/default/files/documentation/esp32-c3-mini-1_datasheet_en.pdf)
-against the schematic's physical pin column. A multimeter in continuity mode from
-TH0/TH1/RLY_MOSFET PCB pads to the ESP32-C3 module castellations will resolve
-this definitively.
-
-Edit the `substitutions:` block at the top of `panda_breath.yaml` once confirmed.
+**Continuity testing recommended:** use a multimeter from the TH0/TH1/RLY_MOSFET
+PCB pads to the ESP32-C3 module castellations to confirm the mapping before
+first flash. The `substitutions:` block in `panda_breath.yaml` is the single
+place to update if adjustments are needed.
 
 ### 2. GPIO0 / ZERO crossing conflict
 
@@ -80,7 +78,8 @@ Run these in order before relying on the device for printing:
 
 1. **NTC readings** — power from 5V USB (no mains), confirm `chamber_temp` and
    `ptc_temp` read plausible room temperature (~20–25°C). If readings are wildly
-   wrong or NaN, GPIO assignments for TH0/TH1 are incorrect.
+   wrong or NaN, the GPIO0/GPIO1 assignments need revisiting — re-check with
+   continuity testing.
 
 2. **NTC B-constant** — compare ESPHome `chamber_temp` against the OEM firmware's
    `warehouse_temper` value (connect to a device still running OEM firmware with a

@@ -32,11 +32,11 @@ The Stock and ESPHome paths use `panda_breath.py` and are identical from the GCo
 - [x] Hardware schematic analyzed (ESP32-C3, relay heater, TRIAC fan, NTC thermistors)
 - [x] Protocol documented — see [Protocol](protocol.md)
 - [x] Klipper extras module (`panda_breath.py`) — stock WebSocket + ESPHome MQTT, stdlib only
-- [x] ESPHome configuration (`esphome/panda_breath.yaml`) — GPIO verification pending on hardware
+- [x] ESPHome configuration (`esphome/panda_breath.yaml`) — GPIO pins inferred from module datasheet, continuity test recommended
 - [x] KlipperMCU firmware (`klipper-firmware/`) — custom ESP-IDF firmware, native Klipper MCU protocol over USB
 - [ ] Standalone WebSocket test tool (`test_ws.py`)
 - [ ] Hardware validation on Snapmaker U1
-- [ ] GPIO pin mapping verified on real hardware (all three paths blocked on TH0, TH1, RLY_MOSFET)
+- [ ] GPIO pin mapping confirmed via continuity testing (TH0 → GPIO0, TH1 → GPIO1, RLY_MOSFET → GPIO18 inferred — needs physical verification)
 
 ---
 
@@ -76,9 +76,9 @@ The Stock and ESPHome paths use `panda_breath.py` and are identical from the GCo
     serial: /dev/ttyUSB0        # adjust port
 
     [heater_generic chamber]
-    heater_pin: panda_breath:gpio10      # placeholder — verify GPIO_RELAY
+    heater_pin: panda_breath:gpio18      # GPIO_RELAY (module pad 26)
     sensor_type: NTC 100K beta 3950
-    sensor_pin: panda_breath:gpio1       # placeholder — verify GPIO_NTC_CHAMBER
+    sensor_pin: panda_breath:gpio0       # GPIO_NTC_CHAMBER (module pad 12)
     control: pid
     pid_kp: 10
     pid_ki: 0.1

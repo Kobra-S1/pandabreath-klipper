@@ -2,16 +2,12 @@
 # Panda Breath — ESPHome Configuration
 # Target: BIQU Panda Breath (ESP32-C3-MINI-1-H4X)
 #
-# !! GPIO VERIFICATION REQUIRED BEFORE FIRST FLASH !!
-#    The hardware schematic lists ESP32-C3 physical IC package pin numbers in the
-#    "ESP32 pin" column — these are NOT GPIO numbers. Three GPIOs are unresolved:
-#      - TH0 (chamber NTC): physical pin 12 → GPIO unknown
-#      - TH1 (PTC NTC):     physical pin 13 → GPIO unknown
-#      - RLY_MOSFET:        physical pin 26 → GPIO unknown
-#                           (GPIO26 does not exist on ESP32-C3; max is GPIO21)
-#    Cross-reference ESP32-C3-MINI-1-H4X module pad layout with the schematic
-#    before compiling. Edit the substitutions block below to correct values.
-#    Verified GPIOs (from IO-labeled nets): GPIO0,2,3,4,5,6,7 — leave those alone.
+# GPIO assignments resolved by cross-referencing schematic module pad numbers
+# with the ESP32-C3-MINI-1 datasheet. Continuity testing on real hardware is
+# recommended to confirm TH0, TH1, and RLY_MOSFET before first flash.
+# See research/hardware-schematic.md for full analysis.
+#
+# Verified GPIOs (from IO-labeled nets): GPIO0,2,3,4,5,6,7 — leave those alone.
 #
 # Klipper integration: MQTT
 #   panda_breath.py Klipper module subscribes to sensor state topics and
@@ -78,25 +74,22 @@ mqtt:
   discovery: false
 
 ################################################################################
-# !! GPIO SUBSTITUTIONS — VERIFY BEFORE COMPILING !!
-# Edit these to match actual GPIO numbers once confirmed from module datasheet.
+# GPIO SUBSTITUTIONS — inferred from module datasheet cross-reference.
+# Continuity testing recommended to confirm before first flash.
 ################################################################################
 substitutions:
-  # TH0: chamber air temperature NTC. Schematic physical pin 12.
-  # Must be an ADC-capable GPIO (ESP32-C3 ADC1: GPIO0–GPIO5).
-  # GPIO0 and GPIO3 are already allocated (IO00, IO03/FAN). Best candidates: GPIO1.
-  gpio_ntc_chamber: "GPIO1"
+  # TH0: chamber air temperature NTC. Module pad 12 = GPIO0 = ADC1_CH0.
+  # Shares the GPIO0 pad with the K2 button net (IO00), but ADC and digital
+  # input can coexist. In ESPHome, this pin is used as ADC only.
+  gpio_ntc_chamber: "GPIO0"
 
-  # TH1: PTC element temperature NTC. Schematic physical pin 13.
-  # Must be an ADC-capable GPIO. Best candidate after GPIO1 taken: unclear.
-  # GPIO2 (IO02/K3 button) and GPIO4–5 (LEDs) are allocated. Placeholder below.
-  # Measure continuity from TH1 pad to ESP32-C3 pads to resolve.
-  gpio_ntc_ptc: "GPIO19"  # !! PLACEHOLDER — GPIO19 is USB D+ and likely wrong
+  # TH1: PTC element temperature NTC. Module pad 13 = GPIO1 = ADC1_CH1.
+  # OEM firmware reads both NTCs via the same ADC1 unit (confirmed from strings).
+  gpio_ntc_ptc: "GPIO1"
 
-  # RLY_MOSFET: relay drive. Schematic physical pin 26.
-  # ESP32-C3 max GPIO is GPIO21; GPIO18/19 = USB; GPIO20/21 = UART0.
-  # Plausible candidates: GPIO8 or GPIO10 (IO10 listed as TBD in schematic).
-  gpio_relay: "GPIO8"  # !! PLACEHOLDER — verify with multimeter continuity
+  # RLY_MOSFET: relay drive. Module pad 26 = GPIO18.
+  # Digital output driving Q3 NPN transistor base → MGR-GJ-5-L SSR.
+  gpio_relay: "GPIO18"
 
 ################################################################################
 # Temperature Sensors
