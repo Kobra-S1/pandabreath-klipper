@@ -43,7 +43,7 @@ The "ESP32 pin" column lists **ESP32-C3-MINI-1 module pad numbers** (not QFN32 I
 
 > **Note on IO net label offset:** The schematic's IO-net labels (IO00, IO02, IO03, etc.) don't always match the GPIO number derived from the module pad. For example, net "IO02" at module pad 6 maps to GPIO3 per the datasheet. This is a labeling convention in the schematic, not an error — the module pad number is the authoritative reference for GPIO mapping.
 
-> **GPIO0 does NOT carry the zero-crossing signal.** The schematic annotates IO00 (GPIO0) with "ZERO crossing", but GPIO0 is the TH0 NTC ADC input — the OEM firmware reads stable chamber temperatures (`WAREHOUSE_ADC_CHAN`) from it via `adc_oneshot`. If GPIO0 carried 100/120 Hz zero-crossing pulses, those ADC readings would be corrupted. The zero-crossing signal is exclusively on GPIO7 (`IO07`/`ZERO`), making the K1 button permanently unavailable.
+> **GPIO0 does NOT carry the zero-crossing signal.** The schematic annotates IO00 (GPIO0) with "ZERO crossing", but GPIO0 is the TH0 NTC ADC input — the OEM firmware reads stable chamber temperatures (`WAREHOUSE_ADC_CHAN`) from it via `adc_oneshot`. If GPIO0 carried 100/120 Hz zero-crossing pulses, those ADC readings would be corrupted. The zero-crossing signal is exclusively on GPIO7 (`IO07`/`ZERO`). The OEM firmware handles both K1 button and zero-crossing on GPIO7 via pulse-width discrimination — ZCD pulses are ~100µs while button presses are 50–200ms.
 
 ## PTC Heater Control
 

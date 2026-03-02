@@ -195,7 +195,7 @@ This means the U1 overlay is a single file drop — no opkg, no entware packages
 
 ### ESPHome firmware (`esphome/`)
 1. ~~Resolve three placeholder GPIO substitutions (TH0, TH1, RLY_MOSFET) via hardware continuity testing~~ — resolved via module datasheet cross-reference (GPIO0, GPIO1, GPIO18); continuity testing recommended to confirm
-2. ~~Verify GPIO0/GPIO7 zero-crossing conflict (oscilloscope with mains connected)~~ — resolved: GPIO0 is the TH0 NTC ADC input (OEM firmware reads stable temperatures from it), so it does not carry ZERO; K1 button (GPIO7) is permanently unavailable
+2. ~~Verify GPIO0/GPIO7 zero-crossing conflict (oscilloscope with mains connected)~~ — resolved: GPIO0 is the TH0 NTC ADC input (does not carry ZERO); GPIO7 is shared between ZCD and K1 button — OEM firmware handles both via pulse-width discrimination; K1 not implemented in our firmware yet
 3. Flash ESPHome, validate NTC readings against OEM firmware values
 4. Tune `min_power` for fan stall threshold
 5. Validate thermal safety cutoff (PTC element overheat interval)

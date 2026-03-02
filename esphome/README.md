@@ -51,17 +51,14 @@ PCB pads to the ESP32-C3 module castellations to confirm the mapping before
 first flash. The `substitutions:` block in `panda_breath.yaml` is the single
 place to update if adjustments are needed.
 
-### 2. K1 button permanently unavailable
+### 2. K1 button not implemented
 
-GPIO7 is the only zero-crossing input (dedicated to `ac_dimmer` `zero_cross_pin`).
-The K1 button shares GPIO7 in the OEM schematic and is therefore permanently
-unavailable in both ESPHome and KlipperMCU firmware.
-
-GPIO0 was investigated as an alternative zero-crossing source (the schematic
-annotates IO00 as "K2 button + ZERO crossing"), but GPIO0 is the TH0 NTC ADC
-input — the OEM firmware reads stable chamber temperatures from it, ruling out
-100/120 Hz zero-crossing pulses on that pin. K2 remains usable as a
-`binary_sensor` (GPIO0 can be shared between ADC and digital input).
+GPIO7 is shared between the TRIAC zero-crossing detector and the K1 button
+in hardware. The OEM firmware handles both on the same pin by distinguishing
+short zero-crossing pulses (~100µs at 100/120Hz) from sustained button presses
+(50–200ms). In the current ESPHome config, GPIO7 is assigned to `ac_dimmer`
+and K1 is not configured. Adding K1 support would require a custom component
+with pulse-width filtering.
 
 ### 3. AC line frequency
 
@@ -155,8 +152,9 @@ or let the CH340K auto-reset circuit handle it (DTR/RTS via esptool).
 - **Fan curve automation** — tie fan speed to chamber temperature delta
   (e.g. ramp fan when `chamber_temp` is >5°C below target).
 
-- **K1 button** — permanently unavailable; GPIO7 is dedicated to zero-crossing
-  and GPIO0 does not carry the ZERO signal (it is the TH0 NTC ADC input).
+- **K1 button** — not currently implemented; GPIO7 is shared with zero-crossing
+  in hardware. The OEM firmware handles both via pulse-width discrimination.
+  Adding K1 would require a custom ESPHome component or ISR filter.
 
 - **Status LEDs** — wire LED K1/K2/K3 states to climate mode and heater/fan
   state for visual feedback without needing the web UI.

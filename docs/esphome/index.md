@@ -52,8 +52,8 @@ The Panda Breath hardware maps directly to ESPHome components:
 | K2-LED (IO05) | GPIO5 | `output.gpio` + `light.binary` |
 | K3-LED (IO04) | GPIO4 | `output.gpio` + `light.binary` |
 
-!!! note "GPIO7 / K1 button unavailable"
-    GPIO7 is dedicated to the TRIAC zero-crossing interrupt in the ESPHome config. The K1 button (which shares GPIO7 in the OEM firmware) is permanently unavailable as a binary sensor. GPIO0 was investigated as an alternative zero-crossing source, but GPIO0 is the TH0 NTC ADC input — the OEM firmware reads stable chamber temperatures from it, ruling out 100/120 Hz pulses on that pin.
+!!! note "GPIO7 — shared between zero-crossing and K1 button"
+    GPIO7 serves dual duty in hardware: the TRIAC zero-crossing detector and the K1 button. The OEM firmware handles both — zero-crossing pulses (~100µs at 100/120Hz) are easily distinguished from button presses (50–200ms). In the ESPHome config, GPIO7 is assigned to the `ac_dimmer` zero-crossing pin and K1 is not configured as a binary sensor. Adding K1 support would require a custom component or ISR filter to discriminate pulse widths.
 
 ### Inferred GPIO pins
 

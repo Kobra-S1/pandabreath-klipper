@@ -169,11 +169,10 @@ switch:
 # GPIO3 (IO03/FAN) → Q2 NPN → MOC3021S optocoupler → BT136-800E TRIAC gate
 # GPIO7 (IO07/ZERO) ← TLP785 zero-crossing optocoupler output
 #
-# GPIO7 is shared with K1 button in the OEM firmware. In this ESPHome config,
-# GPIO7 is dedicated to zero_cross_pin — K1 button is permanently unavailable.
-# (GPIO0 was investigated as an alternative ZERO source, but GPIO0 is the TH0
-# NTC ADC input — OEM firmware reads stable temperatures from it, ruling out
-# 100/120 Hz zero-crossing pulses on that pin.)
+# GPIO7 is shared with the K1 button in hardware. The OEM firmware handles both
+# on the same pin — zero-crossing pulses (~100µs) are distinguishable from
+# button presses (50-200ms). In this ESPHome config, GPIO7 is dedicated to
+# ac_dimmer zero_cross_pin. K1 button support would require a custom filter.
 #
 # min_power: fans typically stall below ~25–35% TRIAC duty. Tune on hardware.
 # zero_missing_percent: 0.0 = fan off if zero-crossing signal is absent (safe).
@@ -236,7 +235,9 @@ climate:
 
 ################################################################################
 # Physical Buttons
-# K1 (GPIO7): permanently unavailable — dedicated to TRIAC zero_cross_pin.
+# K1 (GPIO7): not configured — GPIO7 is shared with zero-crossing in hardware.
+#   OEM firmware handles both (pulse-width discrimination). Adding K1 here would
+#   need a custom component to filter ZCD pulses from button presses.
 # K2 (GPIO0): shared with TH0 NTC ADC; usable as binary_sensor only when ADC
 #   is not actively sampling (ESPHome manages this automatically).
 # K3 (GPIO2): active-low; 10kΩ pullup R2 on schematic.

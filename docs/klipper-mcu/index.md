@@ -81,8 +81,8 @@ Three pins were resolved by cross-referencing the schematic's module pad numbers
 
 Edit `klipper-firmware/components/klipper/board/panda_breath_pins.h` once values are confirmed.
 
-!!! note "GPIO7 / K1 button unavailable"
-    GPIO7 is dedicated to the TRIAC zero-crossing interrupt. The K1 button (which shares GPIO7 in the OEM schematic) is permanently unavailable. GPIO0 was investigated as an alternative zero-crossing source, but GPIO0 is the TH0 NTC ADC input — the OEM firmware reads stable chamber temperatures from it, ruling out 100/120 Hz zero-crossing pulses on that pin.
+!!! note "GPIO7 — shared between zero-crossing and K1 button"
+    GPIO7 serves dual duty: the TRIAC zero-crossing detector (brief ~100µs pulses at 100/120Hz) and the K1 button. The OEM firmware handles both on the same pin — zero-crossing pulses are short and periodic, while button presses are sustained (50–200ms), making them easily distinguishable in an ISR. In the KlipperMCU firmware, GPIO7 is dedicated to the zero-crossing ISR in `fan.c` and K1 is not currently implemented. Adding K1 support would require pulse-width discrimination in the ISR or time-multiplexing the pin configuration.
 
 ---
 
