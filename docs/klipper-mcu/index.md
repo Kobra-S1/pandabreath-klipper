@@ -187,3 +187,60 @@ esptool.py --chip esp32c3 \
 ```
 
 This is a complete flash write — it restores the bootloader, partition table, application, and clears NVS (WiFi credentials will need to be re-entered).
+
+---
+
+## Multi-instance architecture with Klipper Router
+
+The default KlipperMCU setup adds the Panda Breath as a secondary `[mcu panda_breath]` to the main printer's Klipper instance. An alternative is to run a **dedicated Klipper instance** for the Panda Breath and bridge it to the printer using [Klipper Router](https://github.com/paxx12/klipper-router) — a JSON-RPC bridge by paxx12 (same author as the U1 extended firmware).
+
+The key advantage is **fault isolation**: if the Panda Breath's Klipper instance crashes (USB disconnect, MCU timeout, thermal fault), the main printer keeps running. With a single-instance `[mcu panda_breath]` setup, any MCU communication error triggers Klipper's emergency shutdown and kills the print. In the multi-instance setup, Klipper's `verify_heater` and thermal protections still apply to the Panda Breath instance — it shuts down safely on its own — but the printer is unaffected.
+
+This is useful when:
+
+- You want a crash-safe setup — Panda Breath faults don't kill active prints
+- The Snapmaker U1's modified Klipper makes adding a second MCU difficult
+- You want the printer to react to chamber temperature changes via event subscriptions
+
+### How it works
+
+Klipper Router connects to multiple Klipper instances over their Unix sockets and registers shared remote methods on each. The main printer can query chamber temperature, send heater commands, and subscribe to status updates — all via G-code macros.
+
+```
+Klipper (main printer)           Klipper Router           Klipper (Panda Breath)
+  klippy_host_main.sock  ◄────►  router.cfg   ◄────►   klippy_host_pb.sock
+                                                              │
+                                                        [mcu panda_breath]
+                                                          serial: /dev/ttyUSB0
+```
+
+### Example: subscribe to chamber temperature
+
+On the main printer, a macro can subscribe to the Panda Breath's heater status:
+
+```ini
+[gcode_macro SUBSCRIBE_CHAMBER]
+gcode:
+    {action_call_remote_method("router/objects/subscribe",
+        target="panda_breath",
+        objects={"heater_generic chamber": ["temperature"]},
+        gcode_callback="ON_CHAMBER_UPDATE")}
+
+[gcode_macro ON_CHAMBER_UPDATE]
+gcode:
+    {% set temp = params.HEATER_GENERIC_CHAMBER_TEMPERATURE|default(0)|float %}
+    M118 Chamber: {temp}°C
+```
+
+### Example: send heater commands across instances
+
+```ini
+[gcode_macro SET_CHAMBER_TEMP]
+gcode:
+    {% set target = params.TARGET|default(0)|int %}
+    {action_call_remote_method("router/gcode/script",
+        target="panda_breath",
+        script="SET_HEATER_TEMPERATURE HEATER=chamber TARGET=" ~ target)}
+```
+
+See the [Klipper Router README](https://github.com/paxx12/klipper-router) for full configuration and API reference.

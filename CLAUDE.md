@@ -265,4 +265,5 @@ docs/
 - [U1 Extended Firmware docs](https://snapmakeru1-extended-firmware.pages.dev)
 - [U1 Extended Firmware — development](https://snapmakeru1-extended-firmware.pages.dev/development)
 - [U1 Extended Firmware GitHub](https://github.com/paxx12/SnapmakerU1)
+- [Klipper Router](https://github.com/paxx12/klipper-router) — JSON-RPC bridge for multi-instance Klipper setups (by paxx12); potential complement to KlipperMCU path
 - [Klipper extras API reference](https://www.klipper3d.org/API_Server.html)
