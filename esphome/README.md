@@ -51,18 +51,17 @@ PCB pads to the ESP32-C3 module castellations to confirm the mapping before
 first flash. The `substitutions:` block in `panda_breath.yaml` is the single
 place to update if adjustments are needed.
 
-### 2. GPIO0 / ZERO crossing conflict
+### 2. K1 button permanently unavailable
 
-The schematic annotates IO00 (GPIO0) as both "K2 button" and "ZERO crossing".
-If GPIO0 also receives the 100/120 Hz signal from the TLP785 optocoupler:
+GPIO7 is the only zero-crossing input (dedicated to `ac_dimmer` `zero_cross_pin`).
+The K1 button shares GPIO7 in the OEM schematic and is therefore permanently
+unavailable in both ESPHome and KlipperMCU firmware.
 
-- The K2 `binary_sensor` on GPIO0 will be unreliable (corrupted by AC pulses)
-- GPIO0 should become the `zero_cross_pin` for `ac_dimmer` instead of GPIO7
-- GPIO7 can then be freed as a `binary_sensor` for the K1 button
-
-**Verify with an oscilloscope or logic analyser:** power the board from AC and
-probe GPIO0 and GPIO7 with the device idle. If both show 100/120 Hz pulses, use
-GPIO0 for `zero_cross_pin` and add GPIO7 back as `button_k1` in `binary_sensor`.
+GPIO0 was investigated as an alternative zero-crossing source (the schematic
+annotates IO00 as "K2 button + ZERO crossing"), but GPIO0 is the TH0 NTC ADC
+input — the OEM firmware reads stable chamber temperatures from it, ruling out
+100/120 Hz zero-crossing pulses on that pin. K2 remains usable as a
+`binary_sensor` (GPIO0 can be shared between ADC and digital input).
 
 ### 3. AC line frequency
 
@@ -156,8 +155,8 @@ or let the CH340K auto-reset circuit handle it (DTR/RTS via esptool).
 - **Fan curve automation** — tie fan speed to chamber temperature delta
   (e.g. ramp fan when `chamber_temp` is >5°C below target).
 
-- **K1 button** — currently unusable because GPIO7 is the zero-cross pin.
-  Freed if GPIO0 turns out to also carry the ZERO signal (see blocker 2 above).
+- **K1 button** — permanently unavailable; GPIO7 is dedicated to zero-crossing
+  and GPIO0 does not carry the ZERO signal (it is the TH0 NTC ADC input).
 
 - **Status LEDs** — wire LED K1/K2/K3 states to climate mode and heater/fan
   state for visual feedback without needing the web UI.

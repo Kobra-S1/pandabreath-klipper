@@ -169,13 +169,11 @@ switch:
 # GPIO3 (IO03/FAN) → Q2 NPN → MOC3021S optocoupler → BT136-800E TRIAC gate
 # GPIO7 (IO07/ZERO) ← TLP785 zero-crossing optocoupler output
 #
-# GPIO7 conflict: The OEM firmware uses GPIO7 as both the TRIAC zero-cross
-# interrupt and the K1 button. In this ESPHome config, GPIO7 is dedicated to
-# zero_cross_pin. K1 button input is therefore NOT available (see binary_sensor).
-#
-# TODO: Verify whether IO00 (GPIO0) also receives the ZERO signal.
-#   If the TLP785 fans to both GPIO0 and GPIO7, configure zero_cross_pin to
-#   GPIO0 and restore GPIO7 as binary_sensor for K1 button. Confirm with scope.
+# GPIO7 is shared with K1 button in the OEM firmware. In this ESPHome config,
+# GPIO7 is dedicated to zero_cross_pin — K1 button is permanently unavailable.
+# (GPIO0 was investigated as an alternative ZERO source, but GPIO0 is the TH0
+# NTC ADC input — OEM firmware reads stable temperatures from it, ruling out
+# 100/120 Hz zero-crossing pulses on that pin.)
 #
 # min_power: fans typically stall below ~25–35% TRIAC duty. Tune on hardware.
 # zero_missing_percent: 0.0 = fan off if zero-crossing signal is absent (safe).
@@ -238,14 +236,11 @@ climate:
 
 ################################################################################
 # Physical Buttons
-# K1 (GPIO7): NOT available — dedicated to TRIAC zero_cross_pin (see fan section).
-# K2 (GPIO0): active-low; external pullup on schematic.
+# K1 (GPIO7): permanently unavailable — dedicated to TRIAC zero_cross_pin.
+# K2 (GPIO0): shared with TH0 NTC ADC; usable as binary_sensor only when ADC
+#   is not actively sampling (ESPHome manages this automatically).
 # K3 (GPIO2): active-low; 10kΩ pullup R2 on schematic.
 # SW4/BOOT (GPIO9): hardware flash-mode button — do not configure in firmware.
-#
-# NOTE on GPIO0 (K2): The schematic annotates IO00 as "K2 button + ZERO crossing".
-# If GPIO0 also carries the 100/120 Hz ZERO signal from the TLP785, binary_sensor
-# reads will be corrupted by AC frequency pulses. Verify with oscilloscope.
 ################################################################################
 binary_sensor:
   - platform: gpio

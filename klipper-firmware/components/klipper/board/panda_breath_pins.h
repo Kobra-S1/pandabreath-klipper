@@ -23,12 +23,14 @@
 
 // AC zero-crossing detector output (TLP785 optocoupler)
 // Used to synchronise TRIAC phase-angle firing in fan.c
-// NOTE: IO07 is shared with the K1 button net — K1 is unavailable unless
-//       GPIO0 also carries ZERO (verify with oscilloscope before reassigning)
+// GPIO7 is shared with the K1 button net — K1 is permanently unavailable.
+// (GPIO0 was investigated as an alternative ZERO source, but GPIO0 is the
+// TH0 NTC ADC input — OEM firmware reads stable temperatures from it, which
+// rules out 100/120 Hz zero-crossing pulses on that pin.)
 #define GPIO_ZERO_CROSS     7   // IO07/ZERO, schematic physical pin 22
 
 // LED-backlit tactile buttons (K6-6140S01)
-#define GPIO_K2             0   // IO00, schematic physical pin 15 (also ZERO candidate)
+#define GPIO_K2             0   // IO00, schematic physical pin 15
 #define GPIO_K3             2   // IO02, schematic physical pin 6
 
 // Per-button LEDs (active-high via 1K resistors R34/R35/R36)

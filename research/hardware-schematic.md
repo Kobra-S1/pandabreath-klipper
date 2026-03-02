@@ -30,7 +30,7 @@ The "ESP32 pin" column lists **ESP32-C3-MINI-1 module pad numbers** (not QFN32 I
 | `EN` | 8 | EN | RESET button (10K pullup via R4) |
 | `TH0` | 12 | **GPIO0** (ADC1_CH0) | NTC thermistor 0 ADC input — chamber/warehouse temp |
 | `TH1` | 13 | **GPIO1** (ADC1_CH1) | NTC thermistor 1 ADC input — PTC element temp |
-| `IO00` | 15 | GPIO0 | K2 button + ZERO crossing (shared with TH0 ADC) |
+| `IO00` | 15 | GPIO0 | K2 button (shared with TH0 ADC); does NOT carry ZERO — see note below |
 | `IO10` | 17 | GPIO10 | (TBD — unused in current firmware paths) |
 | `IO04` | 19 | GPIO4 | K3-LED |
 | `IO05` | 20 | GPIO5 | K2-LED |
@@ -42,6 +42,8 @@ The "ESP32 pin" column lists **ESP32-C3-MINI-1 module pad numbers** (not QFN32 I
 | `RXD0` | 31 | GPIO20 | CH340K UART RX |
 
 > **Note on IO net label offset:** The schematic's IO-net labels (IO00, IO02, IO03, etc.) don't always match the GPIO number derived from the module pad. For example, net "IO02" at module pad 6 maps to GPIO3 per the datasheet. This is a labeling convention in the schematic, not an error — the module pad number is the authoritative reference for GPIO mapping.
+
+> **GPIO0 does NOT carry the zero-crossing signal.** The schematic annotates IO00 (GPIO0) with "ZERO crossing", but GPIO0 is the TH0 NTC ADC input — the OEM firmware reads stable chamber temperatures (`WAREHOUSE_ADC_CHAN`) from it via `adc_oneshot`. If GPIO0 carried 100/120 Hz zero-crossing pulses, those ADC readings would be corrupted. The zero-crossing signal is exclusively on GPIO7 (`IO07`/`ZERO`), making the K1 button permanently unavailable.
 
 ## PTC Heater Control
 
