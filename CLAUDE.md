@@ -4,10 +4,11 @@ Klipper extras module to integrate the **BIQU Panda Breath** smart chamber heate
 
 ## Project Goal
 
-The Panda Breath has no native Klipper support yet. BTT has not released the firmware source. Two parallel strategies are in development:
+The Panda Breath has no native Klipper support yet. BTT has not released the firmware source. Three parallel strategies are in development:
 
 1. **Stock firmware path** — Klipper `extras/` module that speaks the device's WebSocket JSON API. Target firmware: v0.0.0 (only confirmed stable release; v1.0.1+ has thermal/timing bugs including removal of PTC thermal runaway detection in v1.0.2).
 2. **ESPHome path** — Reflash the ESP32-C3 with ESPHome, which provides native TRIAC phase-angle fan speed control (`ac_dimmer` component), configurable PTC heater relay, NTC sensors, and restored thermal runaway protection. ESPHome integration with Klipper via MQTT.
+3. **KlipperMCU path** — Reflash the ESP32-C3 with a custom ESP-IDF firmware that speaks the Klipper MCU binary protocol over UART0 (via the onboard CH340K USB-C bridge). The Panda Breath becomes a native `[mcu panda_breath]` — no Python extras module, no MQTT broker, Klipper's own PID and thermal safety apply directly. Fan control is internal to firmware (TRIAC phase-angle via zero-crossing ISR). See `klipper-firmware/`.
 
 The Klipper module (`panda_breath.py`) supports both via a transport abstraction: `firmware: stock` uses the WebSocket transport; `firmware: esphome` uses the MQTT transport. From Klipper's perspective the interface is identical either way.
 
@@ -199,6 +200,21 @@ This means the U1 overlay is a single file drop — no opkg, no entware packages
 4. Tune `min_power` for fan stall threshold
 5. Validate thermal safety cutoff (PTC element overheat interval)
 
+### KlipperMCU firmware (`klipper-firmware/`)
+Based on nikhil-robinson/klipper_esp32; adapted for ESP32-C3 + Panda Breath hardware.
+1. Resolve three placeholder GPIOs in `board/panda_breath_pins.h` (TH0/TH1/RLY_MOSFET) via hardware continuity testing — same blocker as ESPHome path
+2. Build: `cd klipper-firmware && idf.py set-target esp32c3 && idf.py build`
+3. Flash: `idf.py -p /dev/cu.wchusbserial* flash`
+4. Copy `components/klipper/klipper/out/klipper.dict` to Klipper host alongside `printer.cfg`
+5. Connect Panda Breath USB-C to U1; verify `/dev/ttyUSB0` appears
+6. Validate: temperature reads, heater control, fan runs during heater-on
+**Key differences from klipper_esp32:**
+- `sdkconfig.defaults`: `CONFIG_IDF_TARGET="esp32c3"`, UART pins TX=21/RX=20
+- `main.c`: `DECL_CONSTANT_STR("MCU", "esp32c3")`, calls `fan_init()` before scheduler
+- `CMakeLists.txt`: `driver` instead of `esp_driver_usb_serial_jtag`; adds `board/fan.c`
+- New: `board/panda_breath_pins.h`, `board/fan.c` (TRIAC phase-angle, internal)
+- All other board files (adc.c already has ESP32-C3 table, timer.c uses gptimer, etc.) work unchanged
+
 ### U1 extended firmware overlay (future)
 1. Source/build opkg packages needed for any remaining dependencies
 2. Create overlay that drops `panda_breath.py` into `/home/lava/klipper/klippy/extras/`
@@ -213,6 +229,28 @@ esphome/
   secrets.yaml           # credentials — gitignored
   secrets.yaml.example   # template
   README.md              # ESPHome setup, TODOs, validation steps, recovery
+klipper-firmware/        # Pathway 3: KlipperMCU ESP-IDF firmware (ESP32-C3)
+  CMakeLists.txt         # ESP-IDF project root (project name: panda_breath)
+  sdkconfig.defaults     # esp32c3 target, UART0 at 250000 baud (TX=21/RX=20)
+  main/
+    main.c               # app_main → FreeRTOS task → fan_init + sched_main
+    Kconfig.projbuild    # Klipper + UART console Kconfig options
+  components/klipper/
+    CMakeLists.txt       # Klipper MCU C sources + board layer + CTR extraction
+    board/
+      panda_breath_pins.h  # GPIO assignments (3 unverified — continuity test required)
+      fan.c              # TRIAC phase-angle fan control (ZCD ISR + esp_timer)
+      adc.c              # ESP32-C3 ADC (adc_oneshot API, NTC channels)
+      gpio.c             # GPIO out/in using ESP-IDF LL macros
+      timer.c            # 1MHz gptimer, timer_dispatch_many in alarm callback
+      console.c          # UART0 via uart_driver_install (CH340K bridge)
+      autoconf.h         # Klipper config → ESP-IDF sdkconfig bridge
+      [+ other board files copied from klipper_esp32]
+    klipper/             # git submodule: nikhil-robinson/klipper (ESP32-adapted fork)
+  printer.cfg.example    # Klipper [mcu panda_breath] + [heater_generic chamber] config
+reference/               # local dev copies of reference repos (gitignored)
+  klipper_esp32/         # nikhil-robinson/klipper_esp32 — upstream reference
+  klipper/               # nikhil-robinson/klipper fork — ESP-IDF adapted Klipper MCU C
 research/                # firmware analysis and protocol notes
 docs/
   klipper_install.md     # installation instructions for U1
