@@ -587,6 +587,7 @@ class PandaBreath:
         return eventtime + REACTOR_POLL
 
     def set_device_target(self, degrees):
+        """Send target to device. Only sends if changed or 0."""
         self.target = float(degrees)
         self._transport.set_target(degrees)
 
@@ -633,19 +634,20 @@ class PandaBreathVirtualPin:
     """A virtual PWM pin that intercepts heater power to sync target temperature."""
     def __init__(self, module):
         self.module = module
-        self.last_power = 0.0
+        self.last_value = 0.0
 
     def get_mcu(self):
         return self.module.printer.lookup_object('mcu')
 
     def set_pwm(self, print_time, value, cycle_time=None):
-        if value > 0 and self.last_power == 0:
+        if value > 0:
             target = self._lookup_heater_target()
-            if target is not None:
+            # If target changed or we are turning ON from OFF, push to device
+            if target is not None and (target != self.module.target or self.last_value == 0):
                 self.module.set_device_target(target)
-        elif value == 0 and self.last_power > 0:
+        elif value == 0 and self.last_value > 0:
             self.module.set_device_target(0)
-        self.last_power = value
+        self.last_value = value
 
     def _lookup_heater_target(self):
         try:
