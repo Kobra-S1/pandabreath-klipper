@@ -154,8 +154,8 @@ port: 80
 heater_pin: panda_breath:pwm
 sensor_type: panda_breath
 control: watermark
-max_delta: 2.0
-min_temp: 0
+max_delta: 0.5
+min_temp: 15
 max_temp: 80
 
 [verify_heater panda_breath]

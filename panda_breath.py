@@ -17,6 +17,19 @@
 #   host: pandabreath.local
 #   port: 80
 #
+#   [heater_generic panda_breath]
+#   heater_pin: panda_breath:pwm
+#   sensor_type: panda_breath
+#   control: watermark
+#   max_delta: 0.5
+#   min_temp: 15
+#   max_temp: 80
+#
+#   [verify_heater panda_breath]
+#   check_gain_time: 120
+#   hysteresis: 5
+#   heating_gain: 1
+#
 # printer.cfg — ESPHome firmware:
 #   [panda_breath]
 #   firmware: esphome
