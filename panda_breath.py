@@ -477,75 +477,67 @@ class _MqttTransport:
 # ─── Klipper heater class ──────────────────────────────────────────────────────
 
 class PandaBreath:
-    """Klipper extras module — exposes the Panda Breath as a heater_generic.
-
-    Registers with Klipper's heater system so that:
-      SET_HEATER_TEMPERATURE HEATER=panda_breath TARGET=45
-      TEMPERATURE_WAIT SENSOR=panda_breath MINIMUM=40
-    work as expected.  The device manages its own PTC relay duty-cycle and fan
-    speed internally; this module only sends on/off + target commands and reads
-    the chamber temperature back.
+    """Klipper extras module — exposes a virtual heater for Panda Breath.
+    
+    Registers a sensor factory and a virtual chip (pin) so that the user
+    can define a standard [heater_generic] in their config. This provides
+    native UI support (target input, graphs) in Fluidd/Mainsail.
     """
 
     def __init__(self, config):
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
         self.name = config.get_name().split()[-1]
-        self.short_name = self.name
 
-        # Temperature state — only written by reactor timer, so no lock needed
-        self._current_temp = 0.
-        self._target_temp = 0.
+        # Config
+        firmware = config.get("firmware", "stock")
+        self.host = config.get("host")
+        self.port = config.getint("port", 80)
+
+        # state — modified by reactor poll
+        self.current_temp = 0.
+        self.target_temp = 0.
+        self.is_connected = False
         self._last_temp_time = 0.
 
-        # Thread-safe queue: background I/O thread appends, reactor timer drains.
-        # collections.deque is safe for single-producer / single-consumer.
+        # Thread-safe queue for background I/O
         self._state_queue = collections.deque()
 
-        # Build the appropriate transport
-        firmware = config.get("firmware", "stock")
+        # Transport
         if firmware == "stock":
-            host = config.get("host")
-            port = config.getint("port", 80)
             self._transport = _WebSocketTransport(
-                host, port,
-                on_message=self._enqueue,
-                on_disconnect=self._on_disconnect)
+                self.host, self.port, self._enqueue, self._on_disconnect)
         elif firmware == "esphome":
             broker = config.get("mqtt_broker")
-            port = config.getint("mqtt_port", 1883)
+            mqtt_port = config.getint("mqtt_port", 1883)
             prefix = config.get("mqtt_topic_prefix", "panda-breath")
             self._transport = _MqttTransport(
-                broker, port, prefix,
-                on_message=self._enqueue,
-                on_disconnect=self._on_disconnect)
+                broker, mqtt_port, prefix, self._enqueue, self._on_disconnect)
         else:
-            raise config.error(
-                "panda_breath: unknown firmware '%s' (use 'stock' or 'esphome')"
-                % firmware)
+            raise config.error("panda_breath: unknown firmware '%s'" % firmware)
 
-        # Register with Klipper's heater manager.
-        # This makes SET_HEATER_TEMPERATURE and TEMPERATURE_WAIT work without
-        # needing a sensor_type or heater_pin in printer.cfg.
-        pheaters = self.printer.load_object(config, "heaters")
-        pheaters.available_heaters.append(self.name)
-        pheaters.available_sensors.append(self.name)
-        pheaters.heaters[self.name] = self
+        # 1. Register sensor factory so user can use: sensor_type: panda_breath
+        pheaters = self.printer.load_object(config, 'heaters')
+        pheaters.add_sensor_factory("panda_breath", self._create_sensor)
 
-        gcode = self.printer.lookup_object("gcode")
-        gcode.register_mux_command("SET_HEATER_TEMPERATURE", "HEATER",
-                                   self.name, self.cmd_SET_HEATER_TEMPERATURE,
-                                   desc="Sets a heater temperature")
+        # 2. Register virtual chip so user can use: heater_pin: panda_breath:pwm
+        ppins = self.printer.lookup_object('pins')
+        ppins.register_chip('panda_breath', self)
 
         # Klipper lifecycle
-        self.printer.register_event_handler(
-            "klippy:connect", self._handle_connect)
-        self.printer.register_event_handler(
-            "klippy:disconnect", self._handle_disconnect)
-        self.printer.register_event_handler(
-            "klippy:shutdown", self._handle_disconnect)
-        self._poll_timer = self.reactor.register_timer(
-            self._reactor_poll, self.reactor.NEVER)
+        self.printer.register_event_handler("klippy:connect", self._handle_connect)
+        self.printer.register_event_handler("klippy:disconnect", self._handle_disconnect)
+        self.printer.register_event_handler("klippy:shutdown", self._handle_disconnect)
+
+        self._poll_timer = self.reactor.register_timer(self._reactor_poll, self.reactor.NEVER)
+
+    def _create_sensor(self, config):
+        return PandaBreathSensor(config, self)
+
+    def setup_pin(self, pin_type, pin_params):
+        if pin_params['pin'] == 'pwm':
+            return PandaBreathVirtualPin(self)
+        raise self.printer.config.error("Unknown panda_breath pin: %s" % (pin_params['pin'],))
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -560,68 +552,102 @@ class PandaBreath:
     # ── state queue ───────────────────────────────────────────────────────────
 
     def _enqueue(self, data):
-        """Called from background I/O thread — only appends to deque."""
         self._state_queue.append(data)
 
     def _on_disconnect(self):
-        """Called from background I/O thread on connection loss."""
-        # No state mutation from the I/O thread; let the reactor poll notice
-        # the temperature going stale via _last_temp_time.
-        pass
+        self.is_connected = False
 
     def _reactor_poll(self, eventtime):
-        """Drain the state queue and update temperature. Runs in reactor thread."""
         while self._state_queue:
             data = self._state_queue.popleft()
+            self.is_connected = True
             temp = data.get("temperature")
             if temp is not None:
-                self._current_temp = float(temp)
+                self.current_temp = float(temp)
                 self._last_temp_time = eventtime
-        # Warn if temperature data has gone stale
-        if (self._last_temp_time > 0.
-                and eventtime - self._last_temp_time > TEMP_STALE_WARN):
-            logger.warning(
-                "panda_breath: no temperature update for %.0fs",
-                eventtime - self._last_temp_time)
-            self._last_temp_time = eventtime  # suppress repeated warnings
+            # Note: We don't update target_temp from the device here; 
+            # heater_generic is the source of truth for the target.
+        
+        if (self._last_temp_time > 0. and eventtime - self._last_temp_time > TEMP_STALE_WARN):
+            logger.warning("panda_breath: temperature data stale (%.0fs)", eventtime - self._last_temp_time)
+            self._last_temp_time = eventtime
+        
         return eventtime + REACTOR_POLL
 
-    # ── Klipper heater interface ───────────────────────────────────────────────
-
-    def get_name(self):
-        return self.name
-
-    def check_busy(self, eventtime):
-        if self._target_temp <= 0.:
-            return False
-        return abs(self._current_temp - self._target_temp) > 2.0
-
-    def get_temp(self, eventtime):
-        return self._current_temp, self._target_temp
-
-    def set_temp(self, degrees):
-        self._target_temp = degrees
+    def set_device_target(self, degrees):
+        self.target_temp = float(degrees)
         self._transport.set_target(degrees)
-
-    def check_busy(self, eventtime, smoothed_temp, extrude_temp):
-        # Report busy (not yet at target) while more than 2°C away.
-        # This is used by TEMPERATURE_WAIT and the idle-timeout heater check.
-        if self._target_temp <= 0.:
-            return False
-        return abs(self._current_temp - self._target_temp) > 2.
 
     def get_status(self, eventtime):
         return {
-            "temperature": round(self._current_temp, 2),
-            "target": self._target_temp,
-            # power is not meaningful here (device manages its own relay)
-            "power": 0.,
+            "temperature": self.current_temp,
+            "target": self.target_temp,
+            "connected": self.is_connected
         }
 
-    def cmd_SET_HEATER_TEMPERATURE(self, gcmd):
-        temp = gcmd.get_float('TARGET', 0.)
-        pheaters = self.printer.lookup_object('heaters')
-        pheaters.set_temperature(self, temp)
+
+class PandaBreathSensor:
+    """Implements the Klipper sensor interface for heater_generic."""
+    def __init__(self, config, module):
+        self.printer = config.get_printer()
+        self.module = module
+        self._callback = None
+
+    def get_temp(self, eventtime):
+        return self.module.current_temp, self.module.target_temp
+
+    def get_status(self, eventtime):
+        return {
+            "temperature": self.module.current_temp,
+            "target": self.module.target_temp,
+        }
+
+    def setup_minmax(self, min_temp, max_temp):
+        pass
+
+    def setup_callback(self, cb):
+        self._callback = cb
+
+    def get_report_time_delta(self):
+        return 1.0
+
+    def set_read_tolerance(self, range_check_val, range_check_time):
+        pass
+
+
+class PandaBreathVirtualPin:
+    """A virtual PWM pin that intercepts heater power to sync target temperature."""
+    def __init__(self, module):
+        self.module = module
+        self.last_power = 0.0
+
+    def get_mcu(self):
+        return self.module.printer.lookup_object('mcu')
+
+    def set_pwm(self, print_time, value, cycle_time=None):
+        if value > 0 and self.last_power == 0:
+            target = self._lookup_heater_target()
+            if target is not None:
+                self.module.set_device_target(target)
+        elif value == 0 and self.last_power > 0:
+            self.module.set_device_target(0)
+        self.last_power = value
+
+    def _lookup_heater_target(self):
+        try:
+            pheaters = self.module.printer.lookup_object('heaters')
+            for name, heater in pheaters.heaters.items():
+                if getattr(heater, 'mcu_pwm', None) == self:
+                    return heater.target_temp
+        except Exception:
+            pass
+        return None
+
+    def setup_max_duration(self, max_duration):
+        pass
+
+    def setup_cycle_time(self, cycle_time, shutdown_value=0.):
+        pass
 
 
 def load_config(config):
