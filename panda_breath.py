@@ -480,8 +480,7 @@ class PandaBreath:
     """Klipper extras module — exposes a virtual heater for Panda Breath.
     
     Registers a sensor factory and a virtual chip (pin) so that the user
-    can define a standard [heater_generic] in their config. This provides
-    native UI support (target input, graphs) in Fluidd/Mainsail.
+    can define a standard [heater_generic] in their config.
     """
 
     def __init__(self, config):
@@ -495,15 +494,17 @@ class PandaBreath:
         self.port = config.getint("port", 80)
 
         # state — modified by reactor poll
-        self.current_temp = 0.
-        self.target_temp = 0.
+        self.temperature = 0.
+        self.target = 0.
+        self.smoothed_temp = 0.
         self.is_connected = False
         self._last_temp_time = 0.
+        self._sensor = None
 
         # Thread-safe queue for background I/O
         self._state_queue = collections.deque()
 
-        # Transport
+        # Transport initialization
         if firmware == "stock":
             self._transport = _WebSocketTransport(
                 self.host, self.port, self._enqueue, self._on_disconnect)
@@ -525,19 +526,25 @@ class PandaBreath:
         ppins.register_chip('panda_breath', self)
 
         # Klipper lifecycle
-        self.printer.register_event_handler("klippy:connect", self._handle_connect)
-        self.printer.register_event_handler("klippy:disconnect", self._handle_disconnect)
-        self.printer.register_event_handler("klippy:shutdown", self._handle_disconnect)
+        self.printer.register_event_handler(
+            "klippy:connect", self._handle_connect)
+        self.printer.register_event_handler(
+            "klippy:disconnect", self._handle_disconnect)
+        self.printer.register_event_handler(
+            "klippy:shutdown", self._handle_disconnect)
 
-        self._poll_timer = self.reactor.register_timer(self._reactor_poll, self.reactor.NEVER)
+        self._poll_timer = self.reactor.register_timer(
+            self._reactor_poll, self.reactor.NEVER)
 
     def _create_sensor(self, config):
-        return PandaBreathSensor(config, self)
+        self._sensor = PandaBreathSensor(config, self)
+        return self._sensor
 
     def setup_pin(self, pin_type, pin_params):
         if pin_params['pin'] == 'pwm':
             return PandaBreathVirtualPin(self)
-        raise self.printer.config.error("Unknown panda_breath pin: %s" % (pin_params['pin'],))
+        raise self.printer.config.error(
+            "Unknown panda_breath pin: %s" % (pin_params['pin'],))
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -563,25 +570,31 @@ class PandaBreath:
             self.is_connected = True
             temp = data.get("temperature")
             if temp is not None:
-                self.current_temp = float(temp)
+                self.temperature = float(temp)
+                self.smoothed_temp = self.temperature
                 self._last_temp_time = eventtime
-            # Note: We don't update target_temp from the device here; 
-            # heater_generic is the source of truth for the target.
+                # Update sensor callback for heater history
+                if self._sensor and self._sensor.callback:
+                    self._sensor.callback(eventtime, self.temperature)
         
-        if (self._last_temp_time > 0. and eventtime - self._last_temp_time > TEMP_STALE_WARN):
-            logger.warning("panda_breath: temperature data stale (%.0fs)", eventtime - self._last_temp_time)
+        if (self._last_temp_time > 0. 
+                and eventtime - self._last_temp_time > TEMP_STALE_WARN):
+            logger.warning(
+                "panda_breath: temperature data stale (%.0fs)",
+                eventtime - self._last_temp_time)
             self._last_temp_time = eventtime
         
         return eventtime + REACTOR_POLL
 
     def set_device_target(self, degrees):
-        self.target_temp = float(degrees)
+        self.target = float(degrees)
         self._transport.set_target(degrees)
 
     def get_status(self, eventtime):
         return {
-            "temperature": self.current_temp,
-            "target": self.target_temp,
+            "temperature": self.temperature,
+            "target": self.target,
+            "smoothed_temp": self.smoothed_temp,
             "connected": self.is_connected
         }
 
@@ -591,22 +604,23 @@ class PandaBreathSensor:
     def __init__(self, config, module):
         self.printer = config.get_printer()
         self.module = module
-        self._callback = None
+        self.callback = None
 
     def get_temp(self, eventtime):
-        return self.module.current_temp, self.module.target_temp
+        return self.module.temperature, self.module.target
 
     def get_status(self, eventtime):
         return {
-            "temperature": self.module.current_temp,
-            "target": self.module.target_temp,
+            "temperature": self.module.temperature,
+            "target": self.module.target,
+            "smoothed_temp": self.module.smoothed_temp,
         }
 
     def setup_minmax(self, min_temp, max_temp):
         pass
 
     def setup_callback(self, cb):
-        self._callback = cb
+        self.callback = cb
 
     def get_report_time_delta(self):
         return 1.0
