@@ -544,7 +544,7 @@ class PandaBreath:
         self.printer.register_event_handler(
             "klippy:disconnect", self._handle_disconnect)
         self.printer.register_event_handler(
-            "klippy:shutdown", self._handle_disconnect)
+            "klippy:shutdown", self._handle_shutdown)
 
         self._poll_timer = self.reactor.register_timer(
             self._reactor_poll, self.reactor.NEVER)
@@ -564,10 +564,19 @@ class PandaBreath:
     def _handle_connect(self):
         self._transport.start()
         self.reactor.update_timer(self._poll_timer, self.reactor.NOW)
+        # Force the device to turn off on connect to synchronize state
+        self.set_device_target(0)
 
     def _handle_disconnect(self):
         self._transport.stop()
         self.reactor.update_timer(self._poll_timer, self.reactor.NEVER)
+        
+    def _handle_shutdown(self):
+        """Emergency turn off the external heater if Klipper crashes."""
+        try:
+            self.set_device_target(0)
+        except Exception:
+            pass
 
     # ── state queue ───────────────────────────────────────────────────────────
 
