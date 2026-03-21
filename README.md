@@ -53,7 +53,7 @@ min_temp: 15
 max_temp: 80
 
 [verify_heater panda_breath]
-check_gain_time: 120
+check_gain_time: 360
 hysteresis: 5
 heating_gain: 1
 
