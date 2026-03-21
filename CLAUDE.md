@@ -54,7 +54,7 @@ All messages are JSON with a top-level `settings` key. The device sends state up
 ```json
 { "settings": { "work_on": true } }          // enable/disable device
 { "settings": { "work_mode": 1 } }           // 1=auto, 2=always_on, 3=filament_drying
-{ "settings": { "temp": 45 } }               // set target temperature (°C)
+{ "settings": { "set_temp": 45 } }           // set target temperature (°C)
 { "settings": { "hotbedtemp": 60 } }         // hotbed temp that triggers auto mode
 ```
 
@@ -66,7 +66,7 @@ All messages are JSON with a top-level `settings` key. The device sends state up
 | `work_mode` | ↔ | int | 1=Auto (follows bed temp), 2=Always On, 3=Filament Drying |
 | `hotbedtemp` | ↔ | int | Bed temp threshold that triggers auto mode |
 | `warehouse_temper` | ←device | float | Current chamber temperature reading |
-| `set_temp` | →device | int | **Likely** the writable field to set target temp (needs live verification) |
+| `set_temp` | →device | int | Writable field to set target chamber temperature (Confirmed) |
 | `temp` | ←device | int | Target temp readback (may be read-only) |
 | `filtertemp` | ? | int | Filter temperature (threshold or sensor reading — TBD) |
 | `filament_temp` | ↔ | int | Filament drying target temperature |
@@ -87,7 +87,7 @@ All messages are JSON with a top-level `settings` key. The device sends state up
 | `language` | →device | string | UI language (`'en'`, `'zh'`) |
 | `set_ap` | →device | ? | Trigger AP/hotspot mode |
 
-**Note:** `set_temp` vs `temp` distinction discovered via binary strings — needs live device verification. The device's auto mode reads `bed_temper`/`nozzle_temper`/`gcode_state` from the Bambu MQTT connection; this won't work with Klipper, so the Klipper module should manage auto logic directly and use `work_mode: 2` (always_on).
+**Note:** `set_temp` is definitively the writable key for setting the target temperature via WebSocket, while `temp` is ignored by the device (confirmed via live testing). The device's auto mode reads `bed_temper`/`nozzle_temper`/`gcode_state` from the Bambu MQTT connection; this won't work with Klipper, so the Klipper module should manage auto logic directly and use `work_mode: 2` (always_on).
 
 See [research/firmware-analysis.md](research/firmware-analysis.md) for binary analysis and [research/protocol-from-v0.0.0.md](research/protocol-from-v0.0.0.md) for the definitive protocol reference (extracted from embedded JS in the v0.0.0 full flash dump).
 
@@ -179,7 +179,7 @@ This means the U1 overlay is a single file drop — no opkg, no entware packages
 - **No confirmed state-query command** (stock firmware) — button/UI changes don't push WS messages (confirmed v0.0.0); no "get state" request exists in JS source; reconnecting may be the only way to get a full state snapshot (unverified). Module tracks its own sent state rather than querying.
 - The device WebSocket drops and needs reconnection — reliability of WS connection is a concern
 - No authentication on the WebSocket — only a concern on untrusted networks
-- Snapmaker U1 modified Klipper may have subtle differences from upstream — test on real hardware
+- **Snapmaker U1 modified Klipper enforces strict duck-typing**. Generic proxies must securely spoof `get_name()`, `short_name`, and `check_busy()` or the U1's custom power-loss and extrusion macros will crash into an `Internal error`. `panda_breath.py` has been updated to proactively cover this.
 - **No pre-built opkg repo for U1 extended firmware** — Entware is present on devel builds but packages must be sourced/built manually; this is a future task when building the U1 overlay
 - **ESPHome GPIO pins resolved** — three GPIO pin assignments (TH0 chamber NTC → GPIO0, TH1 PTC NTC → GPIO1, RLY_MOSFET relay → GPIO18) inferred by cross-referencing schematic module pad numbers with ESP32-C3-MINI-1 datasheet; continuity testing on real hardware recommended to confirm
 

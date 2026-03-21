@@ -52,7 +52,7 @@ port: 80
 The device speaks JSON over WebSocket. All messages use a root key identifying the subsystem:
 
 ```json
-{ "settings": { "work_on": true, "work_mode": 2 } }
+{ "settings": { "work_on": true, "work_mode": 2, "set_temp": 45 } }
 { "settings": { "warehouse_temper": 38.5 } }
 ```
 
