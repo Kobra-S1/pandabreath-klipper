@@ -90,7 +90,7 @@ class _WebSocketTransport:
         self._last_target = degrees
         if degrees > 0:
             self._send_settings(
-                {"work_mode": 2, "work_on": True, "temp": int(degrees)})
+                {"work_mode": 2, "work_on": True, "set_temp": int(degrees)})
         else:
             self._send_settings({"work_on": False})
 
@@ -491,6 +491,7 @@ class PandaBreath:
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
         self.name = config.get_name().split()[-1]
+        self.short_name = self.name
 
         # Temperature state — only written by reactor timer, so no lock needed
         self._current_temp = 0.
@@ -527,9 +528,14 @@ class PandaBreath:
         # This makes SET_HEATER_TEMPERATURE and TEMPERATURE_WAIT work without
         # needing a sensor_type or heater_pin in printer.cfg.
         pheaters = self.printer.load_object(config, "heaters")
-        pheaters.available_heaters.append(config.get_name())
-        pheaters.available_sensors.append(config.get_name())
+        pheaters.available_heaters.append(self.name)
+        pheaters.available_sensors.append(self.name)
         pheaters.heaters[self.name] = self
+
+        gcode = self.printer.lookup_object("gcode")
+        gcode.register_mux_command("SET_HEATER_TEMPERATURE", "HEATER",
+                                   self.name, self.cmd_SET_HEATER_TEMPERATURE,
+                                   desc="Sets a heater temperature")
 
         # Klipper lifecycle
         self.printer.register_event_handler(
@@ -582,6 +588,14 @@ class PandaBreath:
 
     # ── Klipper heater interface ───────────────────────────────────────────────
 
+    def get_name(self):
+        return self.name
+
+    def check_busy(self, eventtime):
+        if self._target_temp <= 0.:
+            return False
+        return abs(self._current_temp - self._target_temp) > 2.0
+
     def get_temp(self, eventtime):
         return self._current_temp, self._target_temp
 
@@ -603,6 +617,11 @@ class PandaBreath:
             # power is not meaningful here (device manages its own relay)
             "power": 0.,
         }
+
+    def cmd_SET_HEATER_TEMPERATURE(self, gcmd):
+        temp = gcmd.get_float('TARGET', 0.)
+        pheaters = self.printer.lookup_object('heaters')
+        pheaters.set_temperature(self, temp)
 
 
 def load_config(config):
