@@ -149,6 +149,25 @@ Both transports run a background I/O thread and push state updates into a thread
 firmware: stock
 host: pandabreath.local   # or IP address
 port: 80
+
+[heater_generic panda_breath]
+heater_pin: panda_breath:pwm
+sensor_type: panda_breath
+control: watermark
+max_delta: 2.0
+min_temp: 0
+max_temp: 80
+
+[verify_heater panda_breath]
+check_gain_time: 120
+hysteresis: 5
+heating_gain: 1
+
+[gcode_macro M141]
+description: Set chamber temperature (Panda Breath)
+gcode:
+    {% set s = params.S|default(0)|float %}
+    SET_HEATER_TEMPERATURE HEATER=panda_breath TARGET={s}
 ```
 
 **ESPHome firmware:**

@@ -14,14 +14,14 @@ This project reverse-engineers its WebSocket API and wraps it in a standard Klip
 
 ## Status
 
-**Research and protocol documentation phase.** The WebSocket protocol has been reverse-engineered from firmware binaries and a full flash dump. The Klipper module is not yet written.
+**Research and protocol documentation phase complete. Klipper integration is functional!**
 
 - [x] Protocol reverse-engineered from firmware strings (v1.0.1, v1.0.2) and embedded JS (v0.0.0 full flash dump)
 - [x] Hardware schematic analyzed (ESP32-C3, relay heater, TRIAC fan, NTC thermistors)
 - [x] Protocol documented: [docs/protocol.md](docs/protocol.md)
-- [ ] Klipper extras module (`panda_breath.py`)
-- [ ] Standalone WebSocket test tool (`test_ws.py`)
-- [ ] Installation guide for Snapmaker U1 (`docs/klipper_install.md`)
+- [x] Klipper extras module (`panda_breath.py`)
+- [x] Standalone WebSocket test tool (`test_ws.py`)
+- [x] Installation guide / overlay for Snapmaker U1 (`docs/klipper_install.md`)
 
 ---
 
@@ -37,12 +37,31 @@ The module will:
 
 The device handles all heater duty-cycling and fan speed control internally. The module only tells it to be on or off.
 
-### `printer.cfg` (planned)
+### `printer.cfg`
 
 ```ini
 [panda_breath]
 host: PandaBreath.local   # or IP address
 port: 80
+
+[heater_generic panda_breath]
+heater_pin: panda_breath:pwm
+sensor_type: panda_breath
+control: watermark
+max_delta: 2.0
+min_temp: 0
+max_temp: 80
+
+[verify_heater panda_breath]
+check_gain_time: 120
+hysteresis: 5
+heating_gain: 1
+
+[gcode_macro M141]
+description: Set chamber temperature (Panda Breath)
+gcode:
+    {% set s = params.S|default(0)|float %}
+    SET_HEATER_TEMPERATURE HEATER=panda_breath TARGET={s}
 ```
 
 ---
