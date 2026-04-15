@@ -103,6 +103,39 @@ In Fluidd/Mainsail, the Panda Breath should appear as a temperature sensor and h
 
 ---
 
+## Step 5 (Optional): Add the KlipperScreen panel
+
+This repository includes a Panda Breath KlipperScreen panel at `KlipperScreen/panda_breath.py`.
+
+Link it into your KlipperScreen panels directory:
+
+```sh
+ln -sf ~/pandabreath-klipper/KlipperScreen/panda_breath.py ~/KlipperScreen/panels/panda_breath.py
+sudo systemctl restart KlipperScreen
+```
+
+Then add menu entries to your KlipperScreen config so the panel appears in both idle and print states.
+Edit `/home/pi/printer_data/config/KlipperScreen.conf` and add:
+
+```ini
+[menu __main panda_breath]
+name: Panda Breath
+icon: heater
+panel: panda_breath
+
+[menu __print panda_breath]
+name: Panda Breath
+icon: heater
+panel: panda_breath
+```
+
+The panel has two pages:
+
+- Climate: current/target display, target adjust, on/off
+- Drying: drying temp, drying time, presets (PLA/PETG/ABS/ASA), start/stop, remaining timer
+
+---
+
 ## Orca Slicer integration
 
 Orca Slicer sets chamber temperature automatically based on the filament profile. In your filament profile, set the **Chamber temperature** field. Orca will emit:

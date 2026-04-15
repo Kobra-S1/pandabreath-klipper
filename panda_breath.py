@@ -172,6 +172,18 @@ class _WebSocketTransport:
         else:
             self._send_settings({"work_on": False})
 
+    def start_drying(self, temp_c, hours):
+        # Filament drying mode (3) with explicit temperature/time settings.
+        self._send_settings({"work_mode": 3})
+        self._send_settings({"filament_temp": int(temp_c)})
+        self._send_settings({"filament_timer": int(hours)})
+        self._send_settings({"isrunning": 1})
+        self._send_settings({"work_on": True})
+
+    def stop_drying(self):
+        self._send_settings({"isrunning": 0})
+        self._send_settings({"work_on": False})
+
     # ── internal ──────────────────────────────────────────────────────────────
 
     def _send_settings(self, fields):
@@ -301,13 +313,34 @@ class _WebSocketTransport:
         settings = msg.get("settings")
         if not isinstance(settings, dict):
             return
+        state = {}
         # Prefer the ADC-calibrated reading; fall back to raw
         temp = settings.get("cal_warehouse_temp", settings.get("warehouse_temper"))
         if temp is not None:
             try:
-                self._on_message({"temperature": float(temp)})
+                state["temperature"] = float(temp)
             except (TypeError, ValueError):
                 pass
+
+        for key in ("work_mode", "set_temp", "temp", "filament_temp",
+                    "filament_timer", "remaining_seconds", "isrunning",
+                    "filament_drying_mode"):
+            if key in settings:
+                state[key] = settings.get(key)
+
+        if "work_on" in settings:
+            raw = settings.get("work_on")
+            # Some firmware emits int 0/1, others bool false/true.
+            if isinstance(raw, bool):
+                state["work_on"] = raw
+            else:
+                try:
+                    state["work_on"] = bool(int(raw))
+                except Exception:
+                    pass
+
+        if state:
+            self._on_message(state)
 
 
 # ─── MQTT transport (ESPHome firmware) ────────────────────────────────────────
@@ -367,6 +400,15 @@ class _MqttTransport:
         else:
             self._publish(
                 "%s/climate/chamber/mode/set" % self._prefix, "off")
+
+    def start_drying(self, temp_c, hours):
+        # ESPHome path has no native Panda drying timer semantics.
+        # Emulate by setting chamber target and enabling heat.
+        _ = hours
+        self.set_target(float(temp_c))
+
+    def stop_drying(self):
+        self.set_target(0.)
 
     # ── MQTT packet helpers ───────────────────────────────────────────────────
 
@@ -608,6 +650,13 @@ class PandaBreath:
         self.target = 0.
         self.smoothed_temp = 0.
         self.is_connected = False
+        self.work_mode = 2
+        self.work_on = False
+        self.device_target = 0.
+        self.filament_temp = 0
+        self.filament_timer = 0
+        self.remaining_seconds = 0
+        self.filament_drying_active = False
         self._last_temp_time = 0.
         self._sensor = None
         self._virtual_pin = None
@@ -655,6 +704,8 @@ class PandaBreath:
         gcode = self.printer.lookup_object('gcode')
         gcode.register_command('PANDA_BREATH_SET', self._cmd_panda_breath_set)
         gcode.register_command('PANDA_BREATH_OFF', self._cmd_panda_breath_off)
+        gcode.register_command('PANDA_BREATH_DRY_START', self._cmd_panda_breath_dry_start)
+        gcode.register_command('PANDA_BREATH_DRY_STOP', self._cmd_panda_breath_dry_stop)
 
     def _create_sensor(self, config):
         self._sensor = PandaBreathSensor(config, self)
@@ -755,6 +806,32 @@ class PandaBreath:
     def _cmd_panda_breath_off(self, gcmd):
         self._set_heater_target(0.)
 
+    cmd_PANDA_BREATH_DRY_START_help = "Start Panda Breath filament drying (TEMP/HOURS)"
+
+    def _cmd_panda_breath_dry_start(self, gcmd):
+        temp = int(gcmd.get_float('TEMP', default=55., minval=0.0))
+        hours = int(gcmd.get_float('HOURS', default=6., minval=1.0, maxval=12.0))
+        self.filament_temp = temp
+        self.filament_timer = hours
+        self.work_mode = 3
+        self.filament_drying_active = True
+        try:
+            self._transport.start_drying(temp, hours)
+        except Exception as exc:
+            logger.warning("panda_breath: failed to start drying mode: %s", exc)
+            raise gcmd.error("Failed to start Panda Breath drying mode")
+
+    cmd_PANDA_BREATH_DRY_STOP_help = "Stop Panda Breath filament drying"
+
+    def _cmd_panda_breath_dry_stop(self, gcmd):
+        _ = gcmd
+        self.filament_drying_active = False
+        self.remaining_seconds = 0
+        try:
+            self._transport.stop_drying()
+        except Exception as exc:
+            logger.warning("panda_breath: failed to stop drying mode: %s", exc)
+
     def _set_heater_target(self, degrees):
         self._attach_heater_hook()
         if self._heater is None:
@@ -783,6 +860,49 @@ class PandaBreath:
                 # Update sensor callback for heater history
                 if self._sensor and self._sensor.callback:
                     self._sensor.callback(eventtime, self.temperature)
+
+            if "work_mode" in data:
+                try:
+                    self.work_mode = int(data.get("work_mode"))
+                except Exception:
+                    pass
+            if "work_on" in data:
+                self.work_on = bool(data.get("work_on"))
+            if "set_temp" in data:
+                try:
+                    self.device_target = float(data.get("set_temp"))
+                except Exception:
+                    pass
+            if "temp" in data and self.device_target == 0.:
+                try:
+                    self.device_target = float(data.get("temp"))
+                except Exception:
+                    pass
+            if "filament_temp" in data:
+                try:
+                    self.filament_temp = int(data.get("filament_temp"))
+                except Exception:
+                    pass
+            if "filament_timer" in data:
+                try:
+                    self.filament_timer = int(data.get("filament_timer"))
+                except Exception:
+                    pass
+            if "remaining_seconds" in data:
+                try:
+                    self.remaining_seconds = int(data.get("remaining_seconds"))
+                except Exception:
+                    pass
+            if "isrunning" in data:
+                try:
+                    self.filament_drying_active = bool(int(data.get("isrunning")))
+                except Exception:
+                    pass
+            if "filament_drying_mode" in data:
+                try:
+                    self.filament_drying_active = bool(int(data.get("filament_drying_mode")))
+                except Exception:
+                    pass
         
         if (self._last_temp_time > 0. 
                 and eventtime - self._last_temp_time > TEMP_STALE_WARN):
@@ -972,11 +1092,19 @@ class PandaBreath:
         self._transport.set_target(degrees)
 
     def get_status(self, eventtime):
+        _ = eventtime
         return {
             "temperature": self.temperature,
             "target": self.target,
             "smoothed_temp": self.smoothed_temp,
-            "connected": self.is_connected
+            "connected": self.is_connected,
+            "work_mode": self.work_mode,
+            "work_on": self.work_on,
+            "device_target": self.device_target,
+            "filament_temp": self.filament_temp,
+            "filament_timer": self.filament_timer,
+            "remaining_seconds": self.remaining_seconds,
+            "filament_drying_active": self.filament_drying_active,
         }
 
 

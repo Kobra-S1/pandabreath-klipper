@@ -124,6 +124,36 @@ gcode:
     {% endif %}
 ```
 
+### KlipperScreen panel (optional)
+
+The repository includes a dedicated KlipperScreen panel at `KlipperScreen/panda_breath.py`.
+
+Install it by linking the panel file into KlipperScreen's panels directory:
+
+```sh
+ln -sf ~/pandabreath-klipper/KlipperScreen/panda_breath.py ~/KlipperScreen/panels/panda_breath.py
+sudo systemctl restart KlipperScreen
+```
+
+Add menu entries so the panel is visible both while idle and during a print. Edit your KlipperScreen config (typically `/home/pi/printer_data/config/KlipperScreen.conf`) and add:
+
+```ini
+[menu __main panda_breath]
+name: Panda Breath
+icon: heater
+panel: panda_breath
+
+[menu __print panda_breath]
+name: Panda Breath
+icon: heater
+panel: panda_breath
+```
+
+The panel provides two pages:
+
+- Climate: chamber target set/on/off
+- Drying: temp + hours controls, material presets (PLA/PETG/ABS/ASA), start/stop, and remaining time
+
 ---
 
 ## Protocol summary
