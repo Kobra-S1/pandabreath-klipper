@@ -56,6 +56,8 @@ logger = logging.getLogger(__name__)
 RECONNECT_DELAY = 5.
 # How often the Klipper reactor timer drains the state queue (seconds)
 REACTOR_POLL = 1.
+# How often to ask stock firmware for an authoritative drying snapshot.
+DRYING_STATUS_REFRESH = 5.
 # Log a warning if no temperature update received within this window (seconds)
 TEMP_STALE_WARN = 60.
 
@@ -144,6 +146,9 @@ class _WebSocketTransport:
         self._thread = None
         # Last target degrees — resent on reconnect to keep device in sync
         self._last_target = 0.
+        self._last_drying = None
+        self._snapshot_lock = threading.Lock()
+        self._snapshot_pending = False
 
     def start(self):
         self._running = True
@@ -162,6 +167,7 @@ class _WebSocketTransport:
 
     def set_target(self, degrees):
         self._last_target = degrees
+        self._last_drying = None
         if degrees > 0:
             # Some firmware revisions (e.g. V1.0.3) are picky about both
             # field type and update order. Match the web UI behavior by
@@ -174,27 +180,93 @@ class _WebSocketTransport:
 
     def start_drying(self, temp_c, hours):
         # Filament drying mode (3) with explicit temperature/time settings.
+        self._last_drying = (int(temp_c), int(hours))
         self._send_settings({"work_mode": 3})
+        self._send_settings({"custom_temp": int(temp_c)})
+        self._send_settings({"custom_timer": int(hours)})
         self._send_settings({"filament_temp": int(temp_c)})
         self._send_settings({"filament_timer": int(hours)})
         self._send_settings({"isrunning": 1})
         self._send_settings({"work_on": True})
 
     def stop_drying(self):
+        self._last_drying = None
         self._send_settings({"isrunning": 0})
         self._send_settings({"work_on": False})
 
+    def force_off(self):
+        self._last_drying = None
+        self._last_target = 0.
+        off_sequence = ({"isrunning": 0}, {"work_on": False})
+        for fields in off_sequence:
+            self._send_settings(fields)
+        for fields in off_sequence:
+            self._send_settings_once(fields)
+
+    def request_snapshot(self):
+        with self._snapshot_lock:
+            if self._snapshot_pending:
+                return
+            self._snapshot_pending = True
+        thread = threading.Thread(
+            target=self._snapshot_once, name="panda_breath_snapshot", daemon=True)
+        thread.start()
+
     # ── internal ──────────────────────────────────────────────────────────────
+
+    def _snapshot_once(self):
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5.)
+            sock.connect((self._host, self._port))
+            pending = self._handshake(sock)
+            sock.settimeout(5.)
+            opcode, payload, _ = self._recv_frame(sock, pending)
+            if opcode in (0x1, 0x2):
+                self._dispatch(payload)
+        except Exception as exc:
+            logger.debug("panda_breath: snapshot query failed: %s", exc)
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+            with self._snapshot_lock:
+                self._snapshot_pending = False
 
     def _send_settings(self, fields):
         """Wrap fields in {"settings": fields} and send as a WebSocket text frame."""
         logger.info("panda_breath: WS send settings=%s", fields)
         self._ws_send(json.dumps({"settings": fields}))
 
+    def _send_settings_once(self, fields):
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2.)
+            sock.connect((self._host, self._port))
+            self._handshake(sock)
+            self._send_frame(sock, json.dumps({"settings": fields}))
+        except Exception as exc:
+            logger.warning(
+                "panda_breath: one-shot WS send failed settings=%s: %s",
+                fields, exc)
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
     def _ws_send(self, text):
         sock = self._sock
         if sock is None:
             return
+        self._send_frame(sock, text)
+
+    def _send_frame(self, sock, text):
         payload = text.encode("utf-8")
         length = len(payload)
         mask = os.urandom(4)
@@ -230,38 +302,48 @@ class _WebSocketTransport:
             if not chunk:
                 raise ConnectionError("WS handshake: connection closed")
             buf += chunk
-        status_line = buf.split(b"\r\n")[0]
+        header, _, pending = buf.partition(b"\r\n\r\n")
+        status_line = header.split(b"\r\n")[0]
         if b"101" not in status_line:
             raise ConnectionError(
                 "WS handshake failed: %s" % status_line.decode(errors="replace"))
+        return pending
 
-    def _recv_exact(self, sock, n):
+    def _recv_exact(self, sock, n, pending=b""):
         buf = bytearray()
+        if pending:
+            buf.extend(pending[:n])
+            pending = pending[n:]
         while len(buf) < n:
             chunk = sock.recv(n - len(buf))
             if not chunk:
                 raise ConnectionError("WS: connection closed mid-frame")
             buf.extend(chunk)
-        return bytes(buf)
+        return bytes(buf), pending
 
-    def _recv_frame(self, sock):
+    def _recv_frame(self, sock, pending=b""):
         """Read one WebSocket frame. Returns (opcode, payload_bytes).
         Handles multi-fragment messages by reassembling (rare in practice here).
         """
-        header = self._recv_exact(sock, 2)
+        header, pending = self._recv_exact(sock, 2, pending)
         # FIN bit and opcode
         opcode = header[0] & 0x0F
         masked = bool(header[1] & 0x80)
         length = header[1] & 0x7F
         if length == 126:
-            length = struct.unpack("!H", self._recv_exact(sock, 2))[0]
+            raw, pending = self._recv_exact(sock, 2, pending)
+            length = struct.unpack("!H", raw)[0]
         elif length == 127:
-            length = struct.unpack("!Q", self._recv_exact(sock, 8))[0]
-        mask_key = self._recv_exact(sock, 4) if masked else None
-        payload = self._recv_exact(sock, length)
+            raw, pending = self._recv_exact(sock, 8, pending)
+            length = struct.unpack("!Q", raw)[0]
+        if masked:
+            mask_key, pending = self._recv_exact(sock, 4, pending)
+        else:
+            mask_key = None
+        payload, pending = self._recv_exact(sock, length, pending)
         if masked:
             payload = bytes(b ^ mask_key[i & 3] for i, b in enumerate(payload))
-        return opcode, payload
+        return opcode, payload, pending
 
     def _run(self):
         """Background I/O thread: connect, receive, reconnect on any failure."""
@@ -271,15 +353,19 @@ class _WebSocketTransport:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(10.)
                 sock.connect((self._host, self._port))
-                self._handshake(sock)
+                pending = self._handshake(sock)
                 sock.settimeout(45.)  # device sends pings; 45 s gives headroom
                 self._sock = sock
                 logger.info("panda_breath: WebSocket connected to %s:%s",
                             self._host, self._port)
-                # Resend desired state so device is in sync after reconnect
-                self.set_target(self._last_target)
+                # Resend active desired state after reconnect, without forcing
+                # work_on=false over a drying cycle started from the device UI.
+                if self._last_drying is not None:
+                    self.start_drying(*self._last_drying)
+                elif self._last_target > 0:
+                    self.set_target(self._last_target)
                 while self._running:
-                    opcode, payload = self._recv_frame(sock)
+                    opcode, payload, pending = self._recv_frame(sock, pending)
                     if opcode == 0x8:   # close
                         break
                     elif opcode == 0x9:  # ping → pong
@@ -322,11 +408,20 @@ class _WebSocketTransport:
             except (TypeError, ValueError):
                 pass
 
-        for key in ("work_mode", "set_temp", "temp", "filament_temp",
-                    "filament_timer", "remaining_seconds", "isrunning",
+        for key in ("work_mode", "set_temp", "temp", "remaining_seconds", "isrunning",
                     "filament_drying_mode"):
             if key in settings:
                 state[key] = settings.get(key)
+
+        if "filament_temp" in settings:
+            state["filament_temp"] = settings.get("filament_temp")
+        elif "custom_temp" in settings:
+            state["filament_temp"] = settings.get("custom_temp")
+
+        if "filament_timer" in settings:
+            state["filament_timer"] = settings.get("filament_timer")
+        elif "custom_timer" in settings:
+            state["filament_timer"] = settings.get("custom_timer")
 
         if "work_on" in settings:
             raw = settings.get("work_on")
@@ -657,6 +752,9 @@ class PandaBreath:
         self.filament_timer = 0
         self.remaining_seconds = 0
         self.filament_drying_active = False
+        self._last_dry_snapshot_time = 0.
+        self._in_shutdown = False
+        self._external_off_lockout = False
         self._last_temp_time = 0.
         self._sensor = None
         self._virtual_pin = None
@@ -721,29 +819,48 @@ class PandaBreath:
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
     def _handle_connect(self):
+        self._in_shutdown = False
         self._attach_heater_hook()
         self._transport.start()
         self.reactor.update_timer(self._poll_timer, self.reactor.NOW)
-        # Force the device to turn off on connect to synchronize state
-        self.set_device_target(0)
+        self._request_drying_snapshot()
         self._last_print_state = None
         self._last_print_file = None
 
     def _handle_disconnect(self):
         # Safe default: attempt to turn off on host disconnect before teardown.
-        try:
-            self.set_device_target(0)
-        except Exception:
-            pass
+        self._in_shutdown = True
+        self._force_device_off("disconnect")
         self._transport.stop()
         self.reactor.update_timer(self._poll_timer, self.reactor.NEVER)
         
     def _handle_shutdown(self):
         """Emergency turn off the external heater if Klipper crashes."""
+        self._in_shutdown = True
+        self._force_device_off("shutdown")
+
+    def _force_device_off(self, reason):
+        self.target = 0.
+        self.device_target = 0.
+        self.work_on = False
+        self.filament_drying_active = False
+        self.remaining_seconds = 0
+        self._last_dry_snapshot_time = 0.
+        self._external_off_lockout = True
         try:
-            self.set_device_target(0)
-        except Exception:
+            self._transport.force_off()
+            return
+        except AttributeError:
             pass
+        except Exception as exc:
+            logger.warning(
+                "panda_breath: failed to force off on %s: %s", reason, exc)
+        try:
+            self._transport.stop_drying()
+            self._transport.set_target(0.)
+        except Exception as exc:
+            logger.warning("panda_breath: fallback off failed on %s: %s",
+                           reason, exc)
 
     def _attach_heater_hook(self):
         if self._heater_set_temp_orig is not None:
@@ -761,6 +878,8 @@ class PandaBreath:
 
         def wrapped_set_temp(degrees):
             self._heater_set_temp_orig(degrees)
+            if degrees > 0.:
+                self._external_off_lockout = False
             self.set_device_target(degrees)
 
         heater.set_temp = wrapped_set_temp
@@ -801,9 +920,13 @@ class PandaBreath:
 
     def _cmd_panda_breath_set(self, gcmd):
         target = gcmd.get_float('TARGET', default=0.)
+        if target > 0.:
+            self._external_off_lockout = False
         self._set_heater_target(target)
 
     def _cmd_panda_breath_off(self, gcmd):
+        _ = gcmd
+        self._force_device_off("off command")
         self._set_heater_target(0.)
 
     cmd_PANDA_BREATH_DRY_START_help = "Start Panda Breath filament drying (TEMP/HOURS)"
@@ -811,12 +934,15 @@ class PandaBreath:
     def _cmd_panda_breath_dry_start(self, gcmd):
         temp = int(gcmd.get_float('TEMP', default=55., minval=0.0))
         hours = int(gcmd.get_float('HOURS', default=6., minval=1.0, maxval=12.0))
+        self._external_off_lockout = False
         self.filament_temp = temp
         self.filament_timer = hours
         self.work_mode = 3
         self.filament_drying_active = True
+        self._last_dry_snapshot_time = 0.
         try:
             self._transport.start_drying(temp, hours)
+            self._request_drying_snapshot()
         except Exception as exc:
             logger.warning("panda_breath: failed to start drying mode: %s", exc)
             raise gcmd.error("Failed to start Panda Breath drying mode")
@@ -825,14 +951,11 @@ class PandaBreath:
 
     def _cmd_panda_breath_dry_stop(self, gcmd):
         _ = gcmd
-        self.filament_drying_active = False
-        self.remaining_seconds = 0
-        try:
-            self._transport.stop_drying()
-        except Exception as exc:
-            logger.warning("panda_breath: failed to stop drying mode: %s", exc)
+        self._force_device_off("dry stop command")
 
     def _set_heater_target(self, degrees):
+        if degrees > 0.:
+            self._external_off_lockout = False
         self._attach_heater_hook()
         if self._heater is None:
             self.set_device_target(degrees)
@@ -847,6 +970,20 @@ class PandaBreath:
 
     def _on_disconnect(self):
         self.is_connected = False
+
+    def _request_drying_snapshot(self):
+        try:
+            self._transport.request_snapshot()
+        except AttributeError:
+            pass
+
+    def _refresh_drying_status(self, eventtime):
+        if not self.filament_drying_active and self.work_mode != 3:
+            return
+        if eventtime - self._last_dry_snapshot_time < DRYING_STATUS_REFRESH:
+            return
+        self._last_dry_snapshot_time = eventtime
+        self._request_drying_snapshot()
 
     def _reactor_poll(self, eventtime):
         while self._state_queue:
@@ -895,14 +1032,21 @@ class PandaBreath:
                     pass
             if "isrunning" in data:
                 try:
+                    was_active = self.filament_drying_active
                     self.filament_drying_active = bool(int(data.get("isrunning")))
+                    if not self.filament_drying_active:
+                        self.remaining_seconds = 0
+                    elif not was_active:
+                        self._last_dry_snapshot_time = 0.
                 except Exception:
                     pass
             if "filament_drying_mode" in data:
                 try:
-                    self.filament_drying_active = bool(int(data.get("filament_drying_mode")))
+                    self.work_mode = 3
                 except Exception:
                     pass
+
+        self._refresh_drying_status(eventtime)
         
         if (self._last_temp_time > 0. 
                 and eventtime - self._last_temp_time > TEMP_STALE_WARN):
@@ -924,7 +1068,13 @@ class PandaBreath:
             except Exception:
                 pass
         if heater_target is not None and abs(float(heater_target) - self.target) > 0.01:
-            self.set_device_target(float(heater_target))
+            heater_target = float(heater_target)
+            if self._external_off_lockout and heater_target > 0.:
+                logger.info(
+                    "panda_breath: ignoring synced heater target %.1f after forced off",
+                    heater_target)
+            else:
+                self.set_device_target(heater_target)
 
         self._handle_print_lifecycle(eventtime)
         
@@ -1088,7 +1238,14 @@ class PandaBreath:
 
     def set_device_target(self, degrees):
         """Send target to device. Only sends if changed or 0."""
+        if self._in_shutdown and float(degrees) > 0.:
+            logger.info(
+                "panda_breath: ignoring target %.1f while Klipper is shutdown",
+                float(degrees))
+            return
         self.target = float(degrees)
+        self.device_target = float(degrees)
+        self.work_on = self.target > 0.
         self._transport.set_target(degrees)
 
     def get_status(self, eventtime):
