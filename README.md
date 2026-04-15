@@ -21,7 +21,9 @@ This project reverse-engineers its WebSocket API and wraps it in a standard Klip
 - [x] Protocol documented: [docs/protocol.md](docs/protocol.md)
 - [x] Klipper extras module (`panda_breath.py`)
 - [x] Standalone WebSocket test tool (`test_ws.py`)
-- [x] Installation guide / overlay for Snapmaker U1 (`docs/klipper_install.md`)
+- [x] Installation guide / overlay for Snapmaker U1 (`docs/klipper/install.md`)
+- [x] Safety-first lifecycle handling (forced off on connect/disconnect/shutdown/end/cancel/error)
+- [x] Optional automatic start mapping (filament type via Moonraker metadata and/or bed target ranges)
 
 ---
 
@@ -31,11 +33,60 @@ The module will:
 
 1. Maintain a persistent WebSocket connection to the device at `ws://<ip>/ws`
 2. Set `work_mode: 2` (always-on) — the device's native auto mode requires a Bambu MQTT connection, which doesn't exist in a Klipper environment
-3. Send `work_on: true` when Klipper sets a non-zero target temperature; `work_on: false` when target is 0
-4. Report `cal_warehouse_temp` (calibrated NTC ADC reading) as the current temperature
-5. Reconnect automatically on connection drop
+3. For `TARGET > 0`, send `work_mode`, then `set_temp`, then `work_on: true`
+4. For `TARGET = 0`, send `work_on: false`
+5. Report `cal_warehouse_temp` (calibrated NTC ADC reading) as the current temperature
+6. Reconnect automatically on connection drop and re-send the last target
+
+For firmware V1.0.3, `work_on` must be sent as JSON booleans (`true` / `false`) for reliable behavior.
 
 The device handles all heater duty-cycling and fan speed control internally. The module only tells it to be on or off.
+
+### Safety lifecycle defaults
+
+By default, Panda Breath is forced off at these times:
+
+- Klipper connect / restart
+- Klipper disconnect
+- Klipper shutdown
+- Print complete
+- Print cancelled
+- Print error
+
+These defaults are intentionally conservative.
+
+### Optional automatic print-start mapping
+
+You can enable automatic targets at print start using filament type and/or bed target maps.
+
+```ini
+[panda_breath]
+auto_on_print_start: true
+auto_off_on_print_end: true
+auto_off_on_cancel: true
+auto_off_on_error: true
+
+# Mapping strategy: filament_then_bed | filament_only | bed_only
+auto_priority: filament_then_bed
+
+# If no map match: keep | off
+unknown_filament_action: keep
+
+# Filament mapping (Moonraker metadata filament_type)
+filament_map: ABS:50,ASA:60,PETG:0,PLA:0
+
+# Bed target mapping (heater_bed target ranges)
+bed_map: 0-60:0,80-110:60
+
+# Moonraker metadata lookup (filament mapping source)
+moonraker_url: http://127.0.0.1:7125
+metadata_timeout: 1.5
+```
+
+Notes:
+
+- Filament mapping uses Moonraker metadata only. If metadata is unavailable, filament mapping is skipped.
+- Mapping targets are validated against the configured Panda Breath heater min/max range. Invalid values cause a clear config error.
 
 ### `printer.cfg`
 
@@ -112,6 +163,7 @@ The Snapmaker U1 runs a modified Klipper + Moonraker stack. The BIQU Panda Breat
 ## Device notes
 
 - Firmware V0.0.0 (Aug 2025) is the only confirmed stable release; V1.0.1+ have thermal regression bugs
+- Firmware V1.0.3 in the field accepts `set_temp` writes and requires boolean `work_on` writes for reliable on/off control
 - WebSocket has no authentication — LAN use only
 - Button/UI state changes do **not** push WebSocket messages (confirmed v0.0.0)
 - No confirmed state-query command; temperature arrives periodically from the device's internal `temp_task`

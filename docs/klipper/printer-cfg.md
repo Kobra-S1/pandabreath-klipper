@@ -16,6 +16,16 @@
     | `firmware` | string | `stock` | Transport to use: `stock` or `esphome` |
     | `host` | string | — | **Required.** Hostname or IP of the Panda Breath |
     | `port` | int | `80` | WebSocket port |
+    | `auto_on_print_start` | bool | `false` | Enable automatic target selection at print start |
+    | `auto_off_on_print_end` | bool | `true` | Force Panda Breath off on print complete |
+    | `auto_off_on_cancel` | bool | `true` | Force Panda Breath off on print cancel |
+    | `auto_off_on_error` | bool | `true` | Force Panda Breath off on print error |
+    | `auto_priority` | string | `filament_then_bed` | Auto target strategy: `filament_then_bed`, `filament_only`, `bed_only` |
+    | `unknown_filament_action` | string | `keep` | No-match behavior: `keep` or `off` |
+    | `filament_map` | string | empty | Filament mapping: `KEY:VALUE,KEY2:VALUE2` |
+    | `bed_map` | string | empty | Bed mapping: `MIN-MAX:VALUE,...` |
+    | `moonraker_url` | string | `http://127.0.0.1:7125` | Moonraker base URL for filament metadata |
+    | `metadata_timeout` | float | `1.5` | Moonraker metadata timeout (seconds) |
 
 === "ESPHome firmware"
 
@@ -34,7 +44,7 @@
     | `mqtt_port` | int | `1883` | MQTT broker port |
     | `mqtt_topic_prefix` | string | `panda-breath` | Must match `topic_prefix` in ESPHome YAML |
 
-The module registers itself as a Klipper `heater_generic` named `panda_breath` and a temperature sensor. No additional `[heater_generic]` or `[temperature_sensor]` blocks are needed.
+You still need a standard `[heater_generic panda_breath]` section and optionally `[verify_heater panda_breath]` in `printer.cfg`.
 
 ---
 
@@ -44,11 +54,13 @@ The module registers itself as a Klipper `heater_generic` named `panda_breath` a
 
     | Condition | Action |
     |---|---|
-    | Klipper sets `TARGET > 0` | Sends `{"settings": {"work_mode": 2, "work_on": true, "temp": TARGET}}` |
+    | Klipper sets `TARGET > 0` | Sends `{"settings": {"work_mode": 2}}`, then `{"settings": {"set_temp": TARGET}}`, then `{"settings": {"work_on": true}}` |
     | Klipper sets `TARGET = 0` | Sends `{"settings": {"work_on": false}}` |
     | `cal_warehouse_temp` received | Reported as current temperature (preferred) |
     | `warehouse_temper` received | Reported as current temperature (fallback) |
     | WebSocket drops | Reconnects; resends last command |
+
+    On firmware V1.0.3, `work_on` control is reliable when sent as JSON booleans (`true` / `false`).
 
 === "ESPHome firmware"
 
@@ -60,6 +72,55 @@ The module registers itself as a Klipper `heater_generic` named `panda_breath` a
     | MQTT connection drops | Reconnects; republishes last command |
 
 The device manages all heater duty-cycling and fan speed control internally. The module only tells it to be on or off and at what target temperature.
+
+---
+
+## Safety lifecycle defaults
+
+By default, the module forces Panda Breath off on:
+
+- Klipper connect/restart
+- Klipper disconnect
+- Klipper shutdown
+- Print complete
+- Print cancelled
+- Print error
+
+The print-end/cancel/error behavior is controlled by:
+
+- `auto_off_on_print_end`
+- `auto_off_on_cancel`
+- `auto_off_on_error`
+
+---
+
+## Automatic print-start mapping
+
+When `auto_on_print_start: true`, the module can choose a start target from maps.
+
+Order is controlled by `auto_priority`:
+
+- `filament_then_bed`
+- `filament_only`
+- `bed_only`
+
+Filament mapping uses Moonraker metadata (`filament_type`) only. If metadata is unavailable, filament mapping is skipped.
+
+Filament map format:
+
+```ini
+filament_map: ABS:50,ASA:60,PETG:0,PLA:0
+```
+
+Bed map format:
+
+```ini
+bed_map: 0-60:0,80-110:60
+```
+
+If no map matches, `unknown_filament_action` decides whether to keep the current target or force off.
+
+All non-zero mapping targets are validated against `[heater_generic panda_breath]` min/max. Out-of-range values raise a clear startup config error.
 
 ---
 

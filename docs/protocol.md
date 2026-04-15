@@ -63,8 +63,9 @@ The primary control and telemetry root.
 
 | Field | Type | Description |
 |---|---|---|
-| `work_on` | bool | `true` = heating on, `false` = off |
+| `work_on` | bool | `true` = heating on, `false` = off. On V1.0.3, booleans are required for reliable control. |
 | `work_mode` | int | `1` = Auto, `2` = Always On, `3` = Filament Drying |
+| `set_temp` | int | General target chamber temperature (°C) used in always-on mode |
 | `hotbedtemp` | int | Bed temperature (°C) that triggers Auto mode |
 | `filament_temp` | int | Target temperature for filament drying (°C) |
 | `filament_timer` | int | Filament drying duration in **hours** |
@@ -74,7 +75,7 @@ The primary control and telemetry root.
 | `language` | string | UI language: `"en"` or `"zh"` |
 
 !!! note "Target temperature write field"
-    The field for setting a general heating target temperature has not been confirmed via live testing. Candidates from firmware strings: `set_temp`, `temp`, `custom_temp`. Use `filament_temp` for drying mode. For always-on mode (`work_mode: 2`), the device heats toward its internally stored target.
+    Live testing on V1.0.3 confirms `set_temp` is the writable field for always-on target updates. `temp` should be treated as readback/telemetry.
 
 #### Read-only fields (device → client)
 
@@ -84,6 +85,7 @@ The primary control and telemetry root.
 | `cal_warehouse_temp` | float | Chamber air temperature, calibrated (°C) — **prefer this** |
 | `cal_ptc_temp` | float | PTC heater element temperature, calibrated (°C) |
 | `temp` | int | Target temperature readback |
+| `set_temp` | int | Last commanded target temperature |
 | `fw_version` | string | Firmware version string |
 | `work_on` | bool | Current on/off state |
 | `work_mode` | int | Current operating mode |
@@ -99,8 +101,10 @@ The primary control and telemetry root.
 #### Example commands
 
 ```json
-// Turn on in always-on mode
-{ "settings": { "work_on": true, "work_mode": 2 } }
+// Turn on in always-on mode (recommended sequence)
+{ "settings": { "work_mode": 2 } }
+{ "settings": { "set_temp": 45 } }
+{ "settings": { "work_on": true } }
 
 // Turn off
 { "settings": { "work_on": false } }
