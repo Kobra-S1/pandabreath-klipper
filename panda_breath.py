@@ -102,8 +102,12 @@ class _WebSocketTransport:
     def set_target(self, degrees):
         self._last_target = degrees
         if degrees > 0:
-            self._send_settings(
-                {"work_mode": 2, "work_on": True, "set_temp": int(degrees)})
+            # Some firmware revisions (e.g. V1.0.3) are picky about both
+            # field type and update order. Match the web UI behavior by
+            # pushing mode/target/on as separate settings updates.
+            self._send_settings({"work_mode": 2})
+            self._send_settings({"set_temp": int(degrees)})
+            self._send_settings({"work_on": True})
         else:
             self._send_settings({"work_on": False})
 
@@ -111,6 +115,7 @@ class _WebSocketTransport:
 
     def _send_settings(self, fields):
         """Wrap fields in {"settings": fields} and send as a WebSocket text frame."""
+        logger.info("panda_breath: WS send settings=%s", fields)
         self._ws_send(json.dumps({"settings": fields}))
 
     def _ws_send(self, text):
@@ -513,6 +518,9 @@ class PandaBreath:
         self.is_connected = False
         self._last_temp_time = 0.
         self._sensor = None
+        self._virtual_pin = None
+        self._heater = None
+        self._heater_set_temp_orig = None
 
         # Thread-safe queue for background I/O
         self._state_queue = collections.deque()
@@ -549,19 +557,25 @@ class PandaBreath:
         self._poll_timer = self.reactor.register_timer(
             self._reactor_poll, self.reactor.NEVER)
 
+        gcode = self.printer.lookup_object('gcode')
+        gcode.register_command('PANDA_BREATH_SET', self._cmd_panda_breath_set)
+        gcode.register_command('PANDA_BREATH_OFF', self._cmd_panda_breath_off)
+
     def _create_sensor(self, config):
         self._sensor = PandaBreathSensor(config, self)
         return self._sensor
 
     def setup_pin(self, pin_type, pin_params):
         if pin_params['pin'] == 'pwm':
-            return PandaBreathVirtualPin(self)
+            self._virtual_pin = PandaBreathVirtualPin(self)
+            return self._virtual_pin
         raise self.printer.config.error(
             "Unknown panda_breath pin: %s" % (pin_params['pin'],))
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
     def _handle_connect(self):
+        self._attach_heater_hook()
         self._transport.start()
         self.reactor.update_timer(self._poll_timer, self.reactor.NOW)
         # Force the device to turn off on connect to synchronize state
@@ -577,6 +591,42 @@ class PandaBreath:
             self.set_device_target(0)
         except Exception:
             pass
+
+    def _attach_heater_hook(self):
+        if self._heater_set_temp_orig is not None:
+            return
+        try:
+            pheaters = self.printer.lookup_object('heaters')
+            heater = pheaters.lookup_heater(self.name)
+        except Exception as exc:
+            logger.warning("panda_breath: unable to hook heater '%s': %s",
+                           self.name, exc)
+            return
+        self._heater = heater
+        self._heater_set_temp_orig = heater.set_temp
+
+        def wrapped_set_temp(degrees):
+            self._heater_set_temp_orig(degrees)
+            self.set_device_target(degrees)
+
+        heater.set_temp = wrapped_set_temp
+        logger.info("panda_breath: hooked heater target updates for '%s'",
+                    self.name)
+
+    def _cmd_panda_breath_set(self, gcmd):
+        target = gcmd.get_float('TARGET', default=0.)
+        self._set_heater_target(target)
+
+    def _cmd_panda_breath_off(self, gcmd):
+        self._set_heater_target(0.)
+
+    def _set_heater_target(self, degrees):
+        self._attach_heater_hook()
+        if self._heater is None:
+            self.set_device_target(degrees)
+            return
+        pheaters = self.printer.lookup_object('heaters')
+        pheaters.set_temperature(self._heater, degrees)
 
     # ── state queue ───────────────────────────────────────────────────────────
 
@@ -605,8 +655,61 @@ class PandaBreath:
                 "panda_breath: temperature data stale (%.0fs)",
                 eventtime - self._last_temp_time)
             self._last_temp_time = eventtime
+
+        # Keep device target synchronized with heater target even if no PWM
+        # callback arrives (seen on some modified Klipper builds).
+        heater_target = self._lookup_heater_target()
+        if heater_target is None:
+            try:
+                webhooks = self.printer.lookup_object('webhooks')
+                all_status = webhooks.get_status(eventtime)
+                hstatus = all_status.get('heater_generic %s' % self.name)
+                if isinstance(hstatus, dict):
+                    heater_target = hstatus.get('target')
+            except Exception:
+                pass
+        if heater_target is not None and abs(float(heater_target) - self.target) > 0.01:
+            self.set_device_target(float(heater_target))
         
         return eventtime + REACTOR_POLL
+
+    def _lookup_heater_target(self):
+        try:
+            pheaters = self.printer.lookup_object('heaters')
+            if self._heater is None:
+                try:
+                    self._heater = pheaters.lookup_heater(self.name)
+                except Exception:
+                    self._heater = None
+            if self._heater is not None:
+                return float(getattr(self._heater, 'target_temp', 0.0))
+
+            try:
+                hobj = self.printer.lookup_object('heater_generic %s' % self.name)
+                if hobj is not None:
+                    return float(getattr(hobj, 'target_temp', 0.0))
+            except Exception:
+                pass
+
+            # Preferred: direct lookup by heater name from [heater_generic <name>]
+            heater = pheaters.heaters.get(self.name)
+            if heater is None:
+                # Fallback: section key may include a prefix depending on build
+                for hname, hobj in pheaters.heaters.items():
+                    if hname.endswith(self.name):
+                        heater = hobj
+                        break
+            if heater is not None:
+                return float(getattr(heater, 'target_temp', 0.0))
+
+            if self._virtual_pin is None:
+                return None
+            for _, heater in pheaters.heaters.items():
+                if getattr(heater, 'mcu_pwm', None) == self._virtual_pin:
+                    return float(getattr(heater, 'target_temp', 0.0))
+        except Exception:
+            pass
+        return None
 
     def set_device_target(self, degrees):
         """Send target to device. Only sends if changed or 0."""
@@ -662,13 +765,15 @@ class PandaBreathVirtualPin:
         return self.module.printer.lookup_object('mcu')
 
     def set_pwm(self, print_time, value, cycle_time=None):
-        if value > 0:
-            target = self._lookup_heater_target()
-            # If target changed or we are turning ON from OFF, push to device
-            if target is not None and (target != self.module.target or self.last_value == 0):
+        target = self._lookup_heater_target()
+        # Sync by heater target, not PWM duty. The Panda Breath has its own
+        # internal temperature control; Klipper's PWM value is only a proxy.
+        if target is not None:
+            if target <= 0:
+                if self.module.target != 0:
+                    self.module.set_device_target(0)
+            elif target != self.module.target or self.last_value == 0:
                 self.module.set_device_target(target)
-        elif value == 0 and self.last_value > 0:
-            self.module.set_device_target(0)
         self.last_value = value
 
     def _lookup_heater_target(self):
