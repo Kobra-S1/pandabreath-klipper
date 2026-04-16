@@ -4,7 +4,7 @@
 
 The Panda Breath has no native Klipper support. This module bridges the gap by exposing the device to Klipper as a standard `heater_generic` — the same interface used by any other chamber heater.
 
-No custom GCode commands are added. Orca Slicer, SuperSlicer, and Klipper macros already know how to interact with a `heater_generic` via `SET_HEATER_TEMPERATURE`. The module just makes that work with the Panda Breath.
+Orca Slicer, SuperSlicer, and Klipper macros already know how to interact with a `heater_generic` via `SET_HEATER_TEMPERATURE`. The module makes that work with the Panda Breath and also provides optional Panda Breath-specific commands for direct drying/start-stop control.
 
 ---
 
@@ -32,8 +32,7 @@ Both transports run a background I/O thread that pushes state into a thread-safe
 
 ### What it does NOT do
 
-- No `PANDA_BREATH_*` GCode commands
-- No mode-switching (filament drying, auto mode) via GCode
+- No automatic Bambu auto-mode emulation inside Klipper
 - No custom macros in the module itself — use standard Klipper macros instead
 
 ---
@@ -46,7 +45,7 @@ The Panda Breath has three operating modes:
 |---|---|---|
 | `1` Auto | Turns on when bed temp crosses a threshold — reads `bed_temper` from Bambu MQTT | **No** — requires Bambu MQTT |
 | `2` Always On | Heater runs while `work_on: true` | **Yes** |
-| `3` Filament Drying | Timed run at a target temp | **Yes**, via commands |
+| `3` Filament Drying | Timed run at a target temp | **Yes**, via Panda Breath drying commands |
 
 The device's auto mode reads bed temperature from a Bambu Lab printer via MQTT over TLS — a protocol not available on Klipper. The module therefore uses `work_mode: 2` (always-on) and Klipper becomes the authority on when to turn the device on or off.
 

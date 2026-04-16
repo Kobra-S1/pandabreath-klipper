@@ -12,7 +12,7 @@ Primary target: **Snapmaker U1**.
 
 The [BIQU Panda Breath](https://biqu.equipment/products/biqu-panda-breath-smart-air-filtration-and-heating-system-with-precise-temperature-regulation) is a 300W PTC chamber heater and HEPA/carbon air filter with WiFi control, designed for enclosed 3D printers. It integrates natively with Bambu Lab printers but has **no Klipper support**.
 
-This project provides a Klipper `extras/` module that exposes the Panda Breath as a standard `heater_generic`. No custom GCodes, no special macros — Orca Slicer and other tools already know how to set chamber temperature via `SET_HEATER_TEMPERATURE`, and this module makes that work.
+This project provides a Klipper `extras/` module that exposes the Panda Breath as a standard `heater_generic`. Orca Slicer and other tools already know how to set chamber temperature via `SET_HEATER_TEMPERATURE`, and this module makes that work. The module also provides optional Panda Breath-specific commands for direct drying/start-stop control.
 
 Three integration paths are supported:
 

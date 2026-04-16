@@ -69,7 +69,7 @@ Add one of the following sections depending on which firmware your Panda Breath 
 
     An MQTT broker (e.g. Mosquitto) must be reachable from both the Panda Breath and the U1. See [ESPHome](../esphome/index.md) for setup details.
 
-The module registers itself as a Klipper heater named `panda_breath`. No additional `[heater_generic]` or `[temperature_sensor]` blocks are needed.
+The module registers a Panda Breath sensor type and virtual heater pin, but you still need a standard `[heater_generic panda_breath]` section in `printer.cfg`. See [printer.cfg Reference](printer-cfg.md) for the full example.
 
 ---
 

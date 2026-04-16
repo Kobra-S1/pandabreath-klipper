@@ -47,8 +47,6 @@ import socket
 import struct
 import threading
 import time
-import urllib.parse
-import urllib.request
 
 logger = logging.getLogger(__name__)
 
@@ -60,65 +58,6 @@ REACTOR_POLL = 1.
 DRYING_STATUS_REFRESH = 5.
 # Log a warning if no temperature update received within this window (seconds)
 TEMP_STALE_WARN = 60.
-
-
-def _parse_target_map(text, config, key_name):
-    """Parse 'KEY:VALUE,KEY2:VALUE2' mapping strings into a dict."""
-    mapping = {}
-    if text is None:
-        return mapping
-    items = [item.strip() for item in text.split(',') if item.strip()]
-    for item in items:
-        if ':' not in item:
-            raise config.error(
-                "panda_breath: invalid %s entry '%s' (expected KEY:VALUE)"
-                % (key_name, item))
-        key, value = item.split(':', 1)
-        key = key.strip().upper()
-        if not key:
-            raise config.error(
-                "panda_breath: empty key in %s entry '%s'"
-                % (key_name, item))
-        try:
-            mapping[key] = float(value.strip())
-        except Exception:
-            raise config.error(
-                "panda_breath: invalid numeric value in %s entry '%s'"
-                % (key_name, item))
-    return mapping
-
-
-def _parse_bed_map(text, config, key_name):
-    """Parse 'MIN-MAX:VALUE,MIN2-MAX2:VALUE2' into a list of tuples."""
-    mapping = []
-    if text is None:
-        return mapping
-    items = [item.strip() for item in text.split(',') if item.strip()]
-    for item in items:
-        if ':' not in item:
-            raise config.error(
-                "panda_breath: invalid %s entry '%s' (expected MIN-MAX:VALUE)"
-                % (key_name, item))
-        temp_range, value = item.split(':', 1)
-        if '-' not in temp_range:
-            raise config.error(
-                "panda_breath: invalid range in %s entry '%s'"
-                % (key_name, item))
-        min_s, max_s = temp_range.split('-', 1)
-        try:
-            min_v = float(min_s.strip())
-            max_v = float(max_s.strip())
-            target = float(value.strip())
-        except Exception:
-            raise config.error(
-                "panda_breath: invalid numeric value in %s entry '%s'"
-                % (key_name, item))
-        if max_v < min_v:
-            raise config.error(
-                "panda_breath: invalid range in %s entry '%s' (max < min)"
-                % (key_name, item))
-        mapping.append((min_v, max_v, target))
-    return mapping
 
 
 # ─── WebSocket transport (stock OEM firmware) ─────────────────────────────────
@@ -709,36 +648,10 @@ class PandaBreath:
         self.host = config.get("host")
         self.port = config.getint("port", 80)
 
-        # Safety defaults: off on print end/cancel/error and on Klipper lifecycle
-        # events unless explicitly disabled.
-        self._auto_on_print_start = config.getboolean('auto_on_print_start', False)
+        # Safety defaults: off on print end/cancel/error unless explicitly disabled.
         self._auto_off_on_print_end = config.getboolean('auto_off_on_print_end', True)
         self._auto_off_on_cancel = config.getboolean('auto_off_on_cancel', True)
         self._auto_off_on_error = config.getboolean('auto_off_on_error', True)
-        self._unknown_filament_action = config.get(
-            'unknown_filament_action', 'keep').strip().lower()
-        if self._unknown_filament_action not in ('keep', 'off'):
-            raise config.error(
-                "panda_breath: unknown_filament_action must be 'keep' or 'off'")
-
-        self._map_priority = config.get(
-            'auto_priority', 'filament_then_bed').strip().lower()
-        if self._map_priority not in (
-                'filament_then_bed', 'filament_only', 'bed_only'):
-            raise config.error(
-                "panda_breath: auto_priority must be filament_then_bed, "
-                "filament_only, or bed_only")
-
-        self._filament_map = _parse_target_map(
-            config.get('filament_map', ''), config, 'filament_map')
-        self._bed_map = _parse_bed_map(
-            config.get('bed_map', ''), config, 'bed_map')
-
-        # Metadata lookup for filament type (optional)
-        self._moonraker_url = config.get(
-            'moonraker_url', 'http://127.0.0.1:7125').rstrip('/')
-        self._metadata_timeout = config.getfloat(
-            'metadata_timeout', 1.5, minval=0.1, maxval=10.0)
 
         # state — modified by reactor poll
         self.temperature = 0.
@@ -760,7 +673,6 @@ class PandaBreath:
         self._virtual_pin = None
         self._heater = None
         self._heater_set_temp_orig = None
-        self._validated_auto_targets = False
         self._last_print_state = None
         self._last_print_file = None
 
@@ -873,7 +785,6 @@ class PandaBreath:
                            self.name, exc)
             return
         self._heater = heater
-        self._validate_auto_targets()
         self._heater_set_temp_orig = heater.set_temp
 
         def wrapped_set_temp(degrees):
@@ -885,38 +796,6 @@ class PandaBreath:
         heater.set_temp = wrapped_set_temp
         logger.info("panda_breath: hooked heater target updates for '%s'",
                     self.name)
-
-    def _validate_auto_targets(self):
-        """Validate configured auto targets against heater min/max limits.
-
-        A target of 0 is always allowed and means off.
-        """
-        if self._validated_auto_targets:
-            return
-        heater = self._heater
-        if heater is None:
-            return
-        min_t = float(getattr(heater, 'min_temp', 0.0))
-        max_t = float(getattr(heater, 'max_temp', 0.0))
-        errors = []
-
-        for filament, target in self._filament_map.items():
-            if target != 0.0 and (target < min_t or target > max_t):
-                errors.append(
-                    "filament_map %s:%.1f is outside heater range %.1f..%.1f"
-                    % (filament, target, min_t, max_t))
-
-        for min_bed, max_bed, target in self._bed_map:
-            if target != 0.0 and (target < min_t or target > max_t):
-                errors.append(
-                    "bed_map %.1f-%.1f:%.1f is outside heater range %.1f..%.1f"
-                    % (min_bed, max_bed, target, min_t, max_t))
-
-        if errors:
-            raise self.printer.config_error(
-                "panda_breath: invalid auto mapping targets:\n%s"
-                % ("\n".join(errors),))
-        self._validated_auto_targets = True
 
     def _cmd_panda_breath_set(self, gcmd):
         target = gcmd.get_float('TARGET', default=0.)
@@ -1089,16 +968,10 @@ class PandaBreath:
         state = str(status.get('state', '')).lower()
         filename = status.get('filename') or ''
         prev_state = self._last_print_state
-        prev_file = self._last_print_file
-
         if prev_state in (None, ''):
             self._last_print_state = state
             self._last_print_file = filename
             return
-
-        # Start transition: standby/complete/cancelled/error -> printing/paused
-        if state in ('printing', 'paused') and prev_state not in ('printing', 'paused'):
-            self._on_print_started(filename, eventtime)
 
         # End transitions
         if state != prev_state:
@@ -1112,91 +985,8 @@ class PandaBreath:
                 logger.info("panda_breath: print error -> forcing off")
                 self._set_heater_target(0.)
 
-        # New file while already printing (rare host behavior) -> re-evaluate.
-        if state in ('printing', 'paused') and filename and filename != prev_file:
-            self._on_print_started(filename, eventtime)
-
         self._last_print_state = state
         self._last_print_file = filename
-
-    def _on_print_started(self, filename, eventtime):
-        if not self._auto_on_print_start:
-            return
-        target = self._select_auto_target(filename, eventtime)
-        if target is None:
-            return
-        logger.info(
-            "panda_breath: print start auto target %.1fC (file=%s)",
-            target, filename or '<unknown>')
-        self._set_heater_target(target)
-
-    def _select_auto_target(self, filename, eventtime):
-        filament = self._resolve_filament_type(filename)
-        if self._map_priority != 'bed_only':
-            ftarget = self._filament_map.get(filament) if filament else None
-            if ftarget is not None:
-                logger.info(
-                    "panda_breath: filament map matched %s -> %.1fC",
-                    filament, ftarget)
-                return ftarget
-            if self._map_priority == 'filament_only':
-                return self._unknown_target()
-
-        if self._map_priority != 'filament_only':
-            btarget = self._lookup_bed_mapped_target(eventtime)
-            if btarget is not None:
-                return btarget
-
-        return self._unknown_target()
-
-    def _unknown_target(self):
-        if self._unknown_filament_action == 'off':
-            logger.info("panda_breath: no auto map match -> forcing off")
-            return 0.
-        logger.info("panda_breath: no auto map match -> keeping current target")
-        return None
-
-    def _resolve_filament_type(self, filename):
-        # Use Moonraker metadata only. If unavailable, do not infer from filename.
-        ftype = self._lookup_filament_type_from_moonraker(filename)
-        if ftype is None:
-            logger.info(
-                "panda_breath: Moonraker filament_type unavailable for file '%s' "
-                "-> skipping filament map", filename or '<unknown>')
-        return ftype
-
-    def _lookup_filament_type_from_moonraker(self, filename):
-        if not filename:
-            return None
-        try:
-            quoted = urllib.parse.quote(filename, safe='')
-            url = "%s/server/files/metadata?filename=%s" % (
-                self._moonraker_url, quoted)
-            with urllib.request.urlopen(url, timeout=self._metadata_timeout) as res:
-                data = json.loads(res.read().decode('utf-8'))
-            ftype = data.get('result', {}).get('filament_type')
-            if not ftype:
-                return None
-            return str(ftype).strip().upper()
-        except Exception:
-            return None
-
-    def _lookup_bed_mapped_target(self, eventtime):
-        if not self._bed_map:
-            return None
-        try:
-            hbed = self.printer.lookup_object('heater_bed')
-            status = hbed.get_status(eventtime)
-            bed_target = float(status.get('target', 0.0))
-        except Exception:
-            return None
-        for min_v, max_v, target in self._bed_map:
-            if min_v <= bed_target <= max_v:
-                logger.info(
-                    "panda_breath: bed map matched %.1fC in %.1f-%.1f -> %.1fC",
-                    bed_target, min_v, max_v, target)
-                return target
-        return None
 
     def _lookup_heater_target(self):
         try:

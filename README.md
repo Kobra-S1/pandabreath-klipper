@@ -8,7 +8,7 @@ Klipper extras module for the **BIQU Panda Breath** smart chamber heater and air
 
 The [BIQU Panda Breath](https://biqu.equipment/products/biqu-panda-breath-smart-air-filtration-and-heating-system-with-precise-temperature-regulation) is a 300W PTC chamber heater and HEPA/carbon air filter with WiFi control, designed for enclosed 3D printers. It has native Bambu Lab integration but no Klipper support.
 
-This project reverse-engineers its WebSocket API and wraps it in a standard Klipper `extras/` module, exposing the Panda Breath as a `heater_generic` — no custom GCodes, no special macros. Orca Slicer and other tools already know how to set chamber temperature via `SET_HEATER_TEMPERATURE`; this module makes that work.
+This project reverse-engineers its WebSocket API and wraps it in a standard Klipper `extras/` module, exposing the Panda Breath as a `heater_generic`. Orca Slicer and other tools already know how to set chamber temperature via `SET_HEATER_TEMPERATURE`; this module makes that work, and the module also provides optional Panda Breath-specific commands for direct drying/start-stop control.
 
 ---
 
@@ -23,7 +23,6 @@ This project reverse-engineers its WebSocket API and wraps it in a standard Klip
 - [x] Standalone WebSocket test tool (`test_ws.py`)
 - [x] Installation guide / overlay for Snapmaker U1 (`docs/klipper/install.md`)
 - [x] Safety-first lifecycle handling (forced off on connect/disconnect/shutdown/end/cancel/error)
-- [x] Optional automatic start mapping (filament type via Moonraker metadata and/or bed target ranges)
 
 ---
 
@@ -54,39 +53,6 @@ By default, Panda Breath is forced off at these times:
 - Print error
 
 These defaults are intentionally conservative.
-
-### Optional automatic print-start mapping
-
-You can enable automatic targets at print start using filament type and/or bed target maps.
-
-```ini
-[panda_breath]
-auto_on_print_start: true
-auto_off_on_print_end: true
-auto_off_on_cancel: true
-auto_off_on_error: true
-
-# Mapping strategy: filament_then_bed | filament_only | bed_only
-auto_priority: filament_then_bed
-
-# If no map match: keep | off
-unknown_filament_action: keep
-
-# Filament mapping (Moonraker metadata filament_type)
-filament_map: ABS:50,ASA:60,PETG:0,PLA:0
-
-# Bed target mapping (heater_bed target ranges)
-bed_map: 0-60:0,80-110:60
-
-# Moonraker metadata lookup (filament mapping source)
-moonraker_url: http://127.0.0.1:7125
-metadata_timeout: 1.5
-```
-
-Notes:
-
-- Filament mapping uses Moonraker metadata only. If metadata is unavailable, filament mapping is skipped.
-- Mapping targets are validated against the configured Panda Breath heater min/max range. Invalid values cause a clear config error.
 
 ### `printer.cfg`
 
