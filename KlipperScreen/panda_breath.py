@@ -12,6 +12,7 @@ class Panel(ScreenPanel):
 
     Features:
     - Heating page: chamber target control
+    - Auto page: native Panda auto mode target/threshold configuration
     - Drying page: drying temperature/time start+stop and remaining time display
     - Live status from Moonraker printer.objects.query (panda_breath + heater_generic)
     """
@@ -45,11 +46,20 @@ class Panel(ScreenPanel):
 
         # UI state vars
         self.climate_target = 45
+        self.auto_enabled = False
+        self.auto_target = 45
+        self.auto_filtertemp = 30
+        self.auto_hotbedtemp = 80
         self.dry_temp = 55
         self.dry_hours = 6
+        self._auto_switch_syncing = False
 
         self._add_custom_css()
         self._build_ui()
+        self._update_target_label()
+        self._update_auto_labels()
+        self._sync_auto_switch(self.auto_enabled)
+        self._update_dry_labels()
         self._start_polling()
 
     def activate(self):
@@ -73,19 +83,23 @@ class Panel(ScreenPanel):
         self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
 
         self.stack.add_named(self._scrollable(self._build_climate_page()), "climate")
+        self.stack.add_named(self._scrollable(self._build_auto_page()), "auto")
         self.stack.add_named(self._scrollable(self._build_drying_page()), "drying")
 
         # Page switch buttons live at the bottom to keep status and controls first.
         nav = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         self.btn_climate = self._gtk.Button("heater", "Heating", "color1", .66, Gtk.PositionType.LEFT, 1)
+        self.btn_auto = self._gtk.Button(None, "Auto", "color3", .66, Gtk.PositionType.LEFT, 1)
         self.btn_drying = self._gtk.Button("clock", "Drying", "color2", .66, Gtk.PositionType.LEFT, 1)
-        for btn in (self.btn_climate, self.btn_drying):
+        for btn in (self.btn_climate, self.btn_auto, self.btn_drying):
             btn.set_vexpand(False)
             btn.set_size_request(-1, max(int(self._gtk.font_size * 2.6), 42))
             btn.get_style_context().add_class("panda_nav_button")
         self.btn_climate.connect("clicked", self._switch_view, "climate")
+        self.btn_auto.connect("clicked", self._switch_view, "auto")
         self.btn_drying.connect("clicked", self._switch_view, "drying")
         nav.pack_start(self.btn_climate, True, True, 0)
+        nav.pack_start(self.btn_auto, True, True, 0)
         nav.pack_start(self.btn_drying, True, True, 0)
 
         root.pack_start(self.lbl_status, False, False, 0)
@@ -241,6 +255,79 @@ class Panel(ScreenPanel):
         page.pack_start(presets_row, False, False, 0)
         return page
 
+    def _build_auto_page(self):
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+
+        self.lbl_auto_active = Gtk.Label(label="Auto Mode: --")
+        self.lbl_auto_target_status = Gtk.Label(label="Target Chamber: -- C")
+        self.lbl_auto_filter_status = Gtk.Label(label="Filter Threshold: -- C")
+        self.lbl_auto_hotbed_status = Gtk.Label(label="Heater Threshold: -- C")
+        status_box = self._status_grid((
+            self.lbl_auto_active,
+            self.lbl_auto_target_status,
+            self.lbl_auto_filter_status,
+            self.lbl_auto_hotbed_status,
+        ))
+
+        toggle_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        toggle_label = Gtk.Label(label="Enable Auto Mode")
+        toggle_label.set_xalign(0)
+        toggle_label.set_hexpand(True)
+        self.auto_switch = Gtk.Switch()
+        self.auto_switch.set_halign(Gtk.Align.END)
+        self.auto_switch.connect("notify::active", self._on_auto_switch_changed)
+        toggle_row.pack_start(toggle_label, True, True, 0)
+        toggle_row.pack_end(self.auto_switch, False, False, 0)
+
+        target_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        btn_auto_target_minus = self._gtk.Button("decrease", "-", "color4")
+        btn_auto_target_plus = self._gtk.Button("increase", "+", "color4")
+        self.btn_auto_target_set = self._gtk.Button(None, self._auto_target_label(), "color3")
+        btn_auto_target_minus.connect("clicked", self._adjust_auto_target, -1)
+        btn_auto_target_plus.connect("clicked", self._adjust_auto_target, 1)
+        self.btn_auto_target_set.connect("clicked", self._show_auto_target_input)
+        target_row.pack_start(btn_auto_target_minus, False, False, 0)
+        target_row.pack_start(self.btn_auto_target_set, True, True, 0)
+        target_row.pack_start(btn_auto_target_plus, False, False, 0)
+
+        filter_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        btn_auto_filter_minus = self._gtk.Button("decrease", "-", "color4")
+        btn_auto_filter_plus = self._gtk.Button("increase", "+", "color4")
+        self.btn_auto_filter_set = self._gtk.Button(None, self._auto_filter_label(), "color3")
+        btn_auto_filter_minus.connect("clicked", self._adjust_auto_filtertemp, -1)
+        btn_auto_filter_plus.connect("clicked", self._adjust_auto_filtertemp, 1)
+        self.btn_auto_filter_set.connect("clicked", self._show_auto_filter_input)
+        filter_row.pack_start(btn_auto_filter_minus, False, False, 0)
+        filter_row.pack_start(self.btn_auto_filter_set, True, True, 0)
+        filter_row.pack_start(btn_auto_filter_plus, False, False, 0)
+
+        hotbed_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        btn_auto_hotbed_minus = self._gtk.Button("decrease", "-", "color4")
+        btn_auto_hotbed_plus = self._gtk.Button("increase", "+", "color4")
+        self.btn_auto_hotbed_set = self._gtk.Button(None, self._auto_hotbed_label(), "color3")
+        btn_auto_hotbed_minus.connect("clicked", self._adjust_auto_hotbedtemp, -1)
+        btn_auto_hotbed_plus.connect("clicked", self._adjust_auto_hotbedtemp, 1)
+        self.btn_auto_hotbed_set.connect("clicked", self._show_auto_hotbed_input)
+        hotbed_row.pack_start(btn_auto_hotbed_minus, False, False, 0)
+        hotbed_row.pack_start(self.btn_auto_hotbed_set, True, True, 0)
+        hotbed_row.pack_start(btn_auto_hotbed_plus, False, False, 0)
+
+        row_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        btn_apply = self._gtk.Button("complete", "Apply Auto", "color3")
+        btn_disable = self._gtk.Button("shutdown", "Auto Off", "color1")
+        btn_apply.connect("clicked", self._cmd_auto_apply)
+        btn_disable.connect("clicked", self._cmd_auto_off)
+        row_actions.pack_start(btn_apply, True, True, 0)
+        row_actions.pack_start(btn_disable, True, True, 0)
+
+        page.pack_start(status_box, False, False, 0)
+        page.pack_start(toggle_row, False, False, 0)
+        page.pack_start(target_row, False, False, 0)
+        page.pack_start(filter_row, False, False, 0)
+        page.pack_start(hotbed_row, False, False, 0)
+        page.pack_start(row_actions, False, False, 0)
+        return page
+
     def _switch_view(self, _btn, view_name):
         self.current_view = view_name
         self.stack.set_visible_child_name(view_name)
@@ -250,6 +337,29 @@ class Panel(ScreenPanel):
 
     def _update_target_label(self):
         self.btn_target_set.set_label(self._target_label())
+
+    def _auto_target_label(self):
+        return f"Target Chamber: {self.auto_target} C"
+
+    def _auto_filter_label(self):
+        return f"Filter Threshold: {self.auto_filtertemp} C"
+
+    def _auto_hotbed_label(self):
+        return f"Heater Threshold: {self.auto_hotbedtemp} C"
+
+    def _update_auto_labels(self):
+        if hasattr(self, "btn_auto_target_set"):
+            self.btn_auto_target_set.set_label(self._auto_target_label())
+        if hasattr(self, "btn_auto_filter_set"):
+            self.btn_auto_filter_set.set_label(self._auto_filter_label())
+        if hasattr(self, "btn_auto_hotbed_set"):
+            self.btn_auto_hotbed_set.set_label(self._auto_hotbed_label())
+        if hasattr(self, "lbl_auto_target_status"):
+            self.lbl_auto_target_status.set_text(f"Target Chamber: {self.auto_target} C")
+        if hasattr(self, "lbl_auto_filter_status"):
+            self.lbl_auto_filter_status.set_text(f"Filter Threshold: {self.auto_filtertemp} C")
+        if hasattr(self, "lbl_auto_hotbed_status"):
+            self.lbl_auto_hotbed_status.set_text(f"Heater Threshold: {self.auto_hotbedtemp} C")
 
     def _dry_temp_label(self):
         return f"{self.dry_temp} C"
@@ -274,6 +384,39 @@ class Panel(ScreenPanel):
             self.MAX_TARGET,
             self._set_climate_target,
             "Target",
+        )
+
+    def _show_auto_target_input(self, btn):
+        self._show_number_input(
+            btn,
+            "Set Auto Target",
+            self.auto_target,
+            self.MIN_TARGET,
+            self.MAX_TARGET,
+            self._set_auto_target,
+            "Auto target",
+        )
+
+    def _show_auto_filter_input(self, btn):
+        self._show_number_input(
+            btn,
+            "Set Filter Threshold",
+            self.auto_filtertemp,
+            0,
+            120,
+            self._set_auto_filtertemp,
+            "Filter threshold",
+        )
+
+    def _show_auto_hotbed_input(self, btn):
+        self._show_number_input(
+            btn,
+            "Set Heater Threshold",
+            self.auto_hotbedtemp,
+            0,
+            120,
+            self._set_auto_hotbedtemp,
+            "Heater threshold",
         )
 
     def _show_dry_temp_input(self, btn):
@@ -503,6 +646,18 @@ class Panel(ScreenPanel):
         self.climate_target = target
         self._update_target_label()
 
+    def _set_auto_target(self, target):
+        self.auto_target = target
+        self._update_auto_labels()
+
+    def _set_auto_filtertemp(self, filtertemp):
+        self.auto_filtertemp = filtertemp
+        self._update_auto_labels()
+
+    def _set_auto_hotbedtemp(self, hotbedtemp):
+        self.auto_hotbedtemp = hotbedtemp
+        self._update_auto_labels()
+
     def _set_dry_temp(self, temp):
         self.dry_temp = temp
         self._update_dry_labels()
@@ -525,6 +680,18 @@ class Panel(ScreenPanel):
         self.dry_hours = int(max(1, min(12, self.dry_hours + delta)))
         self._update_dry_labels()
 
+    def _adjust_auto_target(self, _btn, delta):
+        self.auto_target = int(max(self.MIN_TARGET, min(self.MAX_TARGET, self.auto_target + delta)))
+        self._update_auto_labels()
+
+    def _adjust_auto_filtertemp(self, _btn, delta):
+        self.auto_filtertemp = int(max(0, min(120, self.auto_filtertemp + delta)))
+        self._update_auto_labels()
+
+    def _adjust_auto_hotbedtemp(self, _btn, delta):
+        self.auto_hotbedtemp = int(max(0, min(120, self.auto_hotbedtemp + delta)))
+        self._update_auto_labels()
+
     def _send_gcode(self, gcode):
         try:
             self._screen._ws.klippy.gcode_script(gcode)
@@ -540,11 +707,46 @@ class Panel(ScreenPanel):
     def _cmd_off(self, _btn):
         self._send_gcode("SET_HEATER_TEMPERATURE HEATER=panda_breath TARGET=0")
 
+    def _cmd_auto_apply(self, _btn=None):
+        enable = 1 if self.auto_enabled else 0
+        self._send_gcode(
+            "PANDA_BREATH_AUTO "
+            f"ENABLE={enable} "
+            f"TARGET={self.auto_target} "
+            f"FILTERTEMP={self.auto_filtertemp} "
+            f"HOTBEDTEMP={self.auto_hotbedtemp}"
+        )
+
+    def _cmd_auto_off(self, _btn=None):
+        self._sync_auto_switch(False)
+        self._send_gcode(
+            "PANDA_BREATH_AUTO "
+            f"ENABLE=0 TARGET={self.auto_target} "
+            f"FILTERTEMP={self.auto_filtertemp} "
+            f"HOTBEDTEMP={self.auto_hotbedtemp}"
+        )
+
     def _cmd_dry_start(self, _btn):
         self._send_gcode(f"PANDA_BREATH_DRY_START TEMP={self.dry_temp} HOURS={self.dry_hours}")
 
     def _cmd_dry_stop(self, _btn):
         self._send_gcode("PANDA_BREATH_DRY_STOP")
+
+    def _on_auto_switch_changed(self, switch, _param):
+        if self._auto_switch_syncing:
+            return
+        self.auto_enabled = bool(switch.get_active())
+        self._cmd_auto_apply()
+
+    def _sync_auto_switch(self, active):
+        self.auto_enabled = bool(active)
+        if hasattr(self, "lbl_auto_active"):
+            self.lbl_auto_active.set_text(f"Auto Mode: {'ACTIVE' if self.auto_enabled else 'IDLE'}")
+        if not hasattr(self, "auto_switch"):
+            return
+        self._auto_switch_syncing = True
+        self.auto_switch.set_active(self.auto_enabled)
+        self._auto_switch_syncing = False
 
     def _start_polling(self):
         if self._poll_timer is not None:
@@ -600,11 +802,13 @@ class Panel(ScreenPanel):
         pb = self.pb_status or {}
         hg = self.hg_status or {}
 
+        work_mode = int(pb.get("work_mode", 0) or 0)
         cur_temp = pb.get("temperature", hg.get("temperature", 0.0))
-        target = hg.get("target", pb.get("target", 0.0))
         power = bool(pb.get("work_on", False))
+        auto_target = int(pb.get("auto_target", self.auto_target) or 0)
+        target = auto_target if work_mode == 1 else hg.get("target", pb.get("target", 0.0))
         dry_active = bool(pb.get("filament_drying_active", False))
-        mode = self._display_mode(dry_active, target, power)
+        mode = self._display_mode(work_mode, dry_active, target, power)
 
         self.lbl_status.set_text(
             f"Current Temp: {float(cur_temp):.1f} C   "
@@ -612,6 +816,17 @@ class Panel(ScreenPanel):
             f"Mode: {mode}   "
             f"Power: {'ON' if power else 'OFF'}"
         )
+
+        self.auto_target = auto_target
+        self.auto_filtertemp = int(pb.get("auto_filtertemp", self.auto_filtertemp) or 0)
+        self.auto_hotbedtemp = int(pb.get("auto_hotbedtemp", self.auto_hotbedtemp) or 0)
+        auto_enabled = bool(pb.get("auto_enabled", work_mode == 1 and power))
+        self._sync_auto_switch(auto_enabled)
+        self._update_auto_labels()
+        self.lbl_auto_active.set_text(f"Auto Mode: {'ACTIVE' if auto_enabled else 'IDLE'}")
+        self.lbl_auto_target_status.set_text(f"Target Chamber: {self.auto_target} C")
+        self.lbl_auto_filter_status.set_text(f"Filter Threshold: {self.auto_filtertemp} C")
+        self.lbl_auto_hotbed_status.set_text(f"Heater Threshold: {self.auto_hotbedtemp} C")
 
         dry_temp = int(pb.get("filament_temp", 0) or 0)
         dry_time = int(pb.get("filament_timer", 0) or 0)
@@ -622,9 +837,11 @@ class Panel(ScreenPanel):
         self.lbl_dry_time.set_text(f"Dry Time: {dry_time} h")
         self.lbl_dry_remaining.set_text(f"Remaining: {self._fmt_time(remaining)}")
 
-    def _display_mode(self, dry_active, target, power):
+    def _display_mode(self, work_mode, dry_active, target, power):
         if dry_active:
             return "Drying"
+        if work_mode == 1:
+            return "Auto"
         try:
             target = float(target)
         except Exception:
