@@ -1,7 +1,14 @@
 # pandabreath-klipper
 
-Klipper extras module for the **BIQU Panda Breath** smart chamber heater and air filter. Primary target: **Snapmaker U1**.
+This is a fork of justinh-rahb/pandabreath-klipper klipper extras module, which originally mainly targeted the **Snapmaker U1**.
 
+This fork contains an updated Klipper extras module as well as a KlipperScreen panel for the **BIQU Panda Breath** smart chamber heater and air filter. Primary target: **Elegoo Centauri Carbon** and **Anycubic Kobra-S1** (running Vanilla-Klipper on an external SBC).
+
+This fork is only tested with V1.0.3 of the BTT firmware (the first FW which supports Klipper printers natively).
+
+It has some necessary adaptations to FW 1.0.3, some bugfixes regarding verify_heater as well as some extra safety features (like switching off the heater in case of MCU error).
+
+It now also has a KlipperScreen panel, which allows configuring the heater in a similar way as from the web interface.
 ---
 
 ## What is this?
@@ -115,10 +122,21 @@ icon: heater
 panel: panda_breath
 ```
 
-The panel provides two pages:
+The panel provides three pages:
 
-- Climate: chamber target set/on/off
-- Drying: temp + hours controls, material presets (PLA/PETG/ABS/ASA), start/stop, and remaining time
+- **Heating**: chamber target slider, set target / heating off buttons
+- **Auto**: auto mode toggle, target chamber / filter threshold / heater threshold sliders, apply/restore
+- **Drying**: temp + hours sliders, material presets (PLA/PETG/ABS/ASA), start/stop drying, remaining time
+
+#### Screenshots
+
+<img src="img/main_panel.png" width="50%" alt="KlipperScreen main page with Panda Breath">
+
+<img src="img/heating_panel.png" width="50%" alt="Heating panel">
+
+<img src="img/auto_panel.png" width="50%" alt="Auto panel">
+
+<img src="img/dryer_panel.png" width="50%" alt="Drying panel">
 
 ---
 
