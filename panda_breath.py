@@ -110,6 +110,8 @@ class _WebSocketTransport:
         self._last_auto = None
         self._last_drying = None
         if degrees > 0:
+            # Stop any active drying cycle before switching to heating mode.
+            self._send_settings({"isrunning": 0})
             # Some firmware revisions (e.g. V1.0.3) are picky about both
             # field type and update order. Match the web UI behavior by
             # pushing mode/target/on as separate settings updates.
@@ -117,6 +119,7 @@ class _WebSocketTransport:
             self._send_settings({"set_temp": int(degrees)})
             self._send_settings({"work_on": True})
         else:
+            self._send_settings({"isrunning": 0})
             self._send_settings({"work_on": False})
 
     def set_auto_mode(self, enabled, target_c, filtertemp_c, hotbedtemp_c):
@@ -128,6 +131,7 @@ class _WebSocketTransport:
             int(filtertemp_c),
             int(hotbedtemp_c),
         )
+        self._send_settings({"isrunning": 0})
         self._send_settings({"work_mode": 1})
         self._send_settings({"temp": int(target_c)})
         self._send_settings({"filtertemp": int(filtertemp_c)})
@@ -786,6 +790,7 @@ class PandaBreath:
         self._force_device_off("shutdown")
 
     def _force_device_off(self, reason):
+        self._clear_heater_target_state()
         self.target = 0.
         self.device_target = 0.
         self.auto_enabled = False
@@ -865,6 +870,7 @@ class PandaBreath:
         temp = int(gcmd.get_float('TEMP', default=55., minval=0.0))
         hours = int(gcmd.get_float('HOURS', default=6., minval=1.0, maxval=12.0))
         self._external_off_lockout = False
+        self._clear_heater_target_state()
         self.auto_enabled = False
         self.target = 0.
         self.device_target = 0.
@@ -899,6 +905,7 @@ class PandaBreath:
                 raise gcmd.error(message)
             raise RuntimeError(message)
         self._external_off_lockout = False
+        self._clear_heater_target_state()
         self.auto_enabled = bool(enabled)
         self.auto_target = int(target)
         self.auto_filtertemp = int(filtertemp)
@@ -932,6 +939,15 @@ class PandaBreath:
         pheaters = self.printer.lookup_object('heaters')
         pheaters.set_temperature(self._heater, degrees)
 
+    def _clear_heater_target_state(self):
+        self._attach_heater_hook()
+        if self._heater_set_temp_orig is None:
+            return
+        try:
+            self._heater_set_temp_orig(0.)
+        except Exception as exc:
+            logger.debug("panda_breath: unable to clear heater target state: %s", exc)
+
     # ── state queue ───────────────────────────────────────────────────────────
 
     def _enqueue(self, data):
@@ -963,9 +979,6 @@ class PandaBreath:
                 self.temperature = float(temp)
                 self.smoothed_temp = self.temperature
                 self._last_temp_time = eventtime
-                # Update sensor callback for heater history
-                if self._sensor and self._sensor.callback:
-                    self._sensor.callback(eventtime, self.temperature)
 
             if "work_mode" in data:
                 try:
@@ -1035,7 +1048,25 @@ class PandaBreath:
                     pass
 
         self._refresh_drying_status(eventtime)
-        
+
+        # Always feed the Heater's temperature_callback on every poll cycle,
+        # not just when a WebSocket frame with temperature data arrives.
+        # Two critical fixes:
+        # 1. Converts reactor eventtime → MCU print time.  Heater.get_temp()
+        #    compares last_temp_time against MCU print time (QUELL_STALE_TIME
+        #    check).  Passing reactor eventtime is a different clock domain
+        #    and can cause get_temp() to return 0 °C, which makes
+        #    verify_heater accumulate error and shut down the printer.
+        # 2. Fires every second regardless of whether a new temperature
+        #    WebSocket message arrived, keeping last_temp_time fresh.
+        if self._sensor and self._sensor.callback and self._last_temp_time > 0:
+            try:
+                mcu = self.printer.lookup_object('mcu')
+                read_time = mcu.estimated_print_time(eventtime)
+            except Exception:
+                read_time = eventtime
+            self._sensor.callback(read_time, self.temperature)
+
         if (self._last_temp_time > 0. 
                 and eventtime - self._last_temp_time > TEMP_STALE_WARN):
             logger.warning(
@@ -1057,7 +1088,11 @@ class PandaBreath:
                 pass
         if heater_target is not None and abs(float(heater_target) - self.target) > 0.01:
             heater_target = float(heater_target)
-            if self._external_off_lockout and heater_target > 0.:
+            if self.work_mode in (1, 3):
+                logger.debug(
+                    "panda_breath: ignoring synced heater target %.1f while mode=%s",
+                    heater_target, self.work_mode)
+            elif self._external_off_lockout and heater_target > 0.:
                 logger.info(
                     "panda_breath: ignoring synced heater target %.1f after forced off",
                     heater_target)
@@ -1147,6 +1182,8 @@ class PandaBreath:
         self.target = float(degrees)
         self.device_target = float(degrees)
         self.work_on = self.target > 0.
+        self.filament_drying_active = False
+        self.remaining_seconds = 0
         self._transport.set_target(degrees)
 
     def get_status(self, eventtime):
