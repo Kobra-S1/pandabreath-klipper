@@ -60,6 +60,7 @@ class Panel(ScreenPanel):
         self._auto_switch_pending_state = None
         self._auto_switch_pending_until = 0.0
         self._pending_mode = None
+        self._pending_drying = False
         self._pending_mode_until = 0.0
         self._climate_target_synced = False
         self._auto_settings_synced = False
@@ -795,23 +796,29 @@ class Panel(ScreenPanel):
         if self._send_gcode(
             f"SET_HEATER_TEMPERATURE HEATER=panda_breath TARGET={self.climate_target}"
         ):
-            self._set_pending_mode(2)
             self.pb_status["work_mode"] = 2
             self.pb_status["work_on"] = self.climate_target > 0
             self.pb_status["auto_enabled"] = False
             self.pb_status["filament_drying_active"] = False
             self.hg_status["target"] = float(self.climate_target)
             self._update_ui()
+            # Armed after the refresh, not before it: the refresh reads the
+            # status just written here, so arming first lets the request
+            # confirm itself and the window protects nothing.
+            self._set_pending_mode(2)
 
     def _cmd_off(self, _btn):
         if self._send_gcode("SET_HEATER_TEMPERATURE HEATER=panda_breath TARGET=0"):
-            self._set_pending_mode(2)
             self.pb_status["work_mode"] = 2
             self.pb_status["work_on"] = False
             self.pb_status["auto_enabled"] = False
             self.pb_status["filament_drying_active"] = False
             self.hg_status["target"] = 0.0
             self._update_ui()
+            # Armed after the refresh, not before it: the refresh reads the
+            # status just written here, so arming first lets the request
+            # confirm itself and the window protects nothing.
+            self._set_pending_mode(2)
 
     def _cmd_auto_apply(self, _btn=None):
         enable = 1 if self.auto_enabled else 0
@@ -868,7 +875,6 @@ class Panel(ScreenPanel):
 
     def _cmd_dry_start(self, _btn):
         if self._send_gcode(f"PANDA_BREATH_DRY_START TEMP={self.dry_temp} HOURS={self.dry_hours}"):
-            self._set_pending_mode(3)
             self.pb_status["work_mode"] = 3
             self.pb_status["work_on"] = True
             self.pb_status["auto_enabled"] = False
@@ -877,10 +883,13 @@ class Panel(ScreenPanel):
             self.pb_status["filament_timer"] = self.dry_hours
             self.hg_status["target"] = 0.0
             self._update_ui()
+            # Armed after the refresh, not before it: the refresh reads the
+            # status just written here, so arming first lets the request
+            # confirm itself and the window protects nothing.
+            self._set_pending_mode(3, drying=True)
 
     def _cmd_dry_stop(self, _btn):
         if self._send_gcode("PANDA_BREATH_DRY_STOP"):
-            self._set_pending_mode(3)
             self.pb_status["work_mode"] = 3
             self.pb_status["work_on"] = False
             self.pb_status["auto_enabled"] = False
@@ -888,6 +897,10 @@ class Panel(ScreenPanel):
             self.pb_status["remaining_seconds"] = 0
             self.hg_status["target"] = 0.0
             self._update_ui()
+            # Armed after the refresh, not before it: the refresh reads the
+            # status just written here, so arming first lets the request
+            # confirm itself and the window protects nothing.
+            self._set_pending_mode(3, drying=False)
 
     def _on_auto_switch_changed(self, switch):
         if self._auto_switch_syncing:
@@ -935,8 +948,12 @@ class Panel(ScreenPanel):
     def _monotonic_seconds():
         return GLib.get_monotonic_time() / 1000000.0
 
-    def _set_pending_mode(self, mode):
+    def _set_pending_mode(self, mode, drying=False):
         self._pending_mode = int(mode)
+        # What was asked for, not just which mode it was asked in. Mode 3 is
+        # both "start drying" and "stop drying", so confirming on the mode
+        # alone accepts a reply saying the opposite of the request.
+        self._pending_drying = bool(drying)
         self._pending_mode_until = self._monotonic_seconds() + 4.0
 
     def _start_polling(self):
@@ -1007,12 +1024,17 @@ class Panel(ScreenPanel):
             target = hg.get("target", pb.get("target", 0.0))
         now = self._monotonic_seconds()
         if self._pending_mode is not None:
-            # For mode 3 (drying), don't clear pending until dry_active
-            # is confirmed — the device may report work_mode=3 before
-            # filament_drying_active is set, causing a brief HEATING flash.
+            # For mode 3, the request is confirmed only once the drying flag
+            # matches what was asked for. Starting a run, that keeps a
+            # work_mode=3 arriving before filament_drying_active from flashing
+            # HEATING. Stopping one, it keeps a single stale sample -- the
+            # device sends one, carrying work_mode=3 and filament_drying_active
+            # about two seconds after the stop has already been reported --
+            # from being read as "the device did what I asked" and flashing
+            # DRYING after the user pressed Stop.
             mode_confirmed = (
                 work_mode == self._pending_mode
-                and (self._pending_mode != 3 or dry_active)
+                and (self._pending_mode != 3 or dry_active == self._pending_drying)
             )
             if mode_confirmed:
                 self._pending_mode = None
@@ -1032,13 +1054,23 @@ class Panel(ScreenPanel):
                     power = target > 0
                     dry_active = False
                 elif work_mode == 3:
-                    power = bool(pb.get("work_on", True))
+                    # What was asked for, which for a stop is not drying. This
+                    # branch used to assert drying for any mode-3 request, so
+                    # a stop spent its own window showing the run it had just
+                    # ended.
+                    dry_active = self._pending_drying
+                    power = self._pending_drying
                     target = float(self.dry_temp)
-                    dry_active = True
             else:
                 self._pending_mode = None
                 self._pending_mode_until = 0.0
-        state_text, state_class = self._power_state(work_mode, dry_active, target, power)
+        # The device's own auto flag, falling back to the mode only when it
+        # does not report one. Read here rather than below, because the status
+        # line needs it and the sliders' one-time sync must not come first.
+        auto_enabled = bool(pb.get("auto_enabled", work_mode == 1 and power))
+        state_text, state_class = self._power_state(
+            work_mode, dry_active, target, power, auto_enabled
+        )
 
         self.lbl_status.set_markup(
             f"Current: {float(cur_temp):.1f} \u00b0C   "
@@ -1060,7 +1092,6 @@ class Panel(ScreenPanel):
             self.auto_hotbedtemp = int(pb.get("auto_hotbedtemp", self.auto_hotbedtemp) or 0)
             self._save_auto_snapshot()
             self._update_auto_labels()
-        auto_enabled = bool(pb.get("auto_enabled", work_mode == 1 and power))
         if self._auto_switch_pending_state is not None:
             if auto_enabled == self._auto_switch_pending_state:
                 # Klipper confirmed the desired state — clear pending.
@@ -1096,11 +1127,15 @@ class Panel(ScreenPanel):
         self.lbl_dry_remaining.set_text(f"Remaining: {self._fmt_time(remaining)}")
 
     @staticmethod
-    def _power_state(work_mode, dry_active, target, power):
+    def _power_state(work_mode, dry_active, target, power, auto_enabled=True):
         """Return (display_text, css_class) for the current device state."""
         if dry_active and power:
             return "DRYING", "panda_status_drying"
-        if work_mode == 1:
+        # Auto is what the device reports it is, not what the mode implies.
+        # The device stays in work_mode 1 after auto is switched off and after
+        # a drying run is stopped, so keying on the mode alone made the panel
+        # read AUTO IDLE beside its own Auto Mode switch reading OFF.
+        if work_mode == 1 and auto_enabled:
             if power:
                 return "AUTO ON", "panda_status_auto"
             return "AUTO IDLE", "panda_status_off"
