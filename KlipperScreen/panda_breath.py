@@ -785,8 +785,7 @@ class Panel(ScreenPanel):
 
     def _send_gcode(self, gcode):
         try:
-            self._screen._ws.klippy.gcode_script(gcode)
-            return True
+            return bool(self._screen._ws.api.gcode_script(gcode))
         except Exception as exc:
             logging.error("PandaBreath panel gcode error: %s", exc)
             self._screen.show_popup_message("Failed to send command to Klipper")
@@ -967,9 +966,8 @@ class Panel(ScreenPanel):
 
     def _poll_status(self):
         try:
-            direct_ws = getattr(getattr(getattr(self, "_screen", None), "_ws", None), "klippy", None)
-            direct_ws = getattr(direct_ws, "_ws", None)
-            if not callable(getattr(direct_ws, "send_method", None)):
+            api = getattr(getattr(getattr(self, "_screen", None), "_ws", None), "api", None)
+            if not callable(getattr(api, "query_objects", None)):
                 return True
 
             objects = {
@@ -991,7 +989,7 @@ class Panel(ScreenPanel):
                 except Exception as exc:
                     logging.debug("PandaBreath panel status callback error: %s", exc)
 
-            direct_ws.send_method("printer.objects.query", {"objects": objects}, _cb)
+            api.query_objects(objects, _cb)
         except Exception as exc:
             logging.debug("PandaBreath panel poll error: %s", exc)
         return True
